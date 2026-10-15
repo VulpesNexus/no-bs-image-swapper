@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Stored image deletion failure checks</title>
+<script>
+  const SETTINGS = 'image-swap-settings-v1';
+  const IMAGE = 'image-swap-upload-v1:test';
+  const data = 'data:image/png;base64,AAAA';
+  const values = new Map([[IMAGE, data], [SETTINGS, JSON.stringify({
+    enabled: true, rules: [], assets: [{ id: 'test', name: 'test.png', bytes: 3 }]
+  })]]);
+  let failDelete = false, failSettings = false;
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => {
+    if (key === SETTINGS && failSettings) throw Error('settings write failed');
+    values.set(key, value);
+  };
+  window.GM_deleteValue = key => {
+    if (key === IMAGE && failDelete) throw Error('image deletion failed');
+    values.delete(key);
+  };
+  window.GM_registerMenuCommand = (label, callback) => {
+    if (label === 'Manage local images') window.openLibrary = callback;
+    return label;
+  };
+  window.GM_unregisterMenuCommand = () => {};
+  window.GM_addValueChangeListener = () => 1;
+  const nativeAttachShadow = Element.prototype.attachShadow;
+  let capturedImageSwapRoot;
+  Element.prototype.attachShadow = function(options) {
+    const root = nativeAttachShadow.call(this, options);
+    if (this.id === 'image-swap-widget-host') capturedImageSwapRoot = root;
+    return root;
+  };
+  window.confirm = () => true;
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+</script>
+<script src="../ImageSwap.user.js"></script>
+<body>
+<script>
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const savedCount = () => JSON.parse(values.get(SETTINGS)).assets.length;
+  const ui = capturedImageSwapRoot;
+  const button = () => ui.querySelector('#assetList button[data-asset-id="test"]');
+  try {
+    openLibrary();
+    check(button(), 'image listed before deletion');
+    failDelete = true;
+    button().click();
+    check(savedCount() === 1 && values.get(IMAGE) === data && button(),
+      'failed image deletion preserves bytes, settings, and panel');
+    failDelete = false;
+    failSettings = true;
+    button().click();
+    check(savedCount() === 1 && values.get(IMAGE) === data && button(),
+      'failed settings write restores image bytes and panel');
+    failSettings = false;
+    button().click();
+    check(savedCount() === 0 && !values.has(IMAGE) && !button(),
+      'successful deletion removes bytes, settings, and panel entry');
+    document.body.dataset.acceptance = 'PASS';
+  } catch (err) {
+    document.body.dataset.acceptance = 'FAIL';
+    document.body.dataset.error = err.message;
+  }
+</script>
+</body>

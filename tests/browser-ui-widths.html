@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>No-BS Image Swapper narrow viewport check</title>
+<!-- Headless Chromium will not size a window below 500 px, so narrower
+     viewports run tests/browser-ui.html inside frames of exact sizes. -->
+<style>body { margin: 0; } iframe { display: block; border: 0; margin-bottom: 4px; }</style>
+<body>
+<script>
+  const sizes = [[450, 700], [360, 740], [320, 640], [300, 640]];
+  const results = new Map();
+  addEventListener('message', event => {
+    const frame = [...document.querySelectorAll('iframe')].find(item => item.contentWindow === event.source);
+    if (!frame) return;
+    results.set(frame.dataset.size, event.data);
+    if (results.size < sizes.length) return;
+    const failures = [...results].filter(([, result]) => result.acceptance !== 'PASS');
+    document.body.dataset.results = [...results].map(([size, result]) =>
+      size + '=' + result.width + ':' + result.acceptance).join(' ');
+    document.body.dataset.error = failures.map(([size, result]) => size + ': ' + result.error).join('; ');
+    document.body.dataset.acceptance = failures.length ||
+      [...results].some(([size, result]) => String(result.width) !== size.split('x')[0]) ? 'FAIL' : 'PASS';
+  });
+  for (const [width, height] of sizes) {
+    const frame = document.createElement('iframe');
+    frame.dataset.size = width + 'x' + height;
+    frame.width = width;
+    frame.height = height;
+    frame.src = 'browser-ui.html';
+    document.body.append(frame);
+  }
+</script>

@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SVG xlink mutation check</title>
+<script>
+  const replacement = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"></svg>');
+  const settings = { enabled: true, showButton: false, rules: [{
+    id: 'svg', enabled: true, mode: 'url', scope: '*',
+    pattern: 'https://cdn.example/new.png', selector: '', replacement
+  }], assets: [] };
+  window.GM_getValue = (key, fallback) => key === 'image-swap-settings-v1' ? JSON.stringify(settings) : fallback;
+  window.GM_setValue = () => {};
+  window.GM_deleteValue = () => {};
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+</script>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <image id="target" width="40" height="40" href="https://cdn.example/old.png"></image>
+</svg>
+<script>
+  const target = document.querySelector('#target');
+  const xlink = 'http://www.w3.org/1999/xlink';
+  target.setAttributeNS(xlink, 'xlink:href', 'https://cdn.example/old.png');
+</script>
+<script src="../ImageSwap.user.js"></script>
+<script>
+  const waitFor = (predicate, message) => new Promise((resolve, reject) => {
+    let tries = 0;
+    const tick = () => predicate() ? resolve() : ++tries > 150 ? reject(Error(message)) : setTimeout(tick, 20);
+    tick();
+  });
+  (async () => {
+    if (target.getAttribute('href') !== 'https://cdn.example/old.png') throw Error('unexpected initial match');
+    target.setAttributeNS(xlink, 'xlink:href', 'https://cdn.example/new.png');
+    await waitFor(() => target.getAttribute('href') === replacement &&
+      target.getAttributeNS(xlink, 'href') === replacement, 'xlink change was not replaced');
+    target.setAttributeNS(xlink, 'xlink:href', 'https://cdn.example/other.png');
+    await waitFor(() => target.getAttribute('href') === 'https://cdn.example/old.png' &&
+      target.getAttributeNS(xlink, 'href') === 'https://cdn.example/other.png',
+      'later xlink change was not preserved');
+    document.body.dataset.acceptance = 'PASS';
+  })().catch(error => {
+    document.body.dataset.acceptance = 'FAIL';
+    document.body.dataset.error = error.message;
+  });
+</script>

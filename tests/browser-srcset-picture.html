@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Picture srcset comma URL check</title>
+<script>
+  const sourceUrl = 'https://cdn.example/w_100,h_100/photo.png';
+  const replacement = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"></svg>');
+  const settings = { enabled: true, showButton: false, rules: [{
+    id: 'comma', enabled: true, mode: 'url', scope: '*', pattern: sourceUrl,
+    selector: '', replacement
+  }], assets: [] };
+  window.GM_getValue = (key, fallback) => key === 'image-swap-settings-v1' ? JSON.stringify(settings) : fallback;
+  window.GM_setValue = () => {};
+  window.GM_deleteValue = () => {};
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+</script>
+<picture>
+  <source id="source" srcset="https://cdn.example/w_100,h_100/photo.png 1x, https://cdn.example/other.png 2x">
+  <img id="target" src="https://cdn.example/fallback.png" alt="target">
+</picture>
+<body>
+<script src="../ImageSwap.user.js"></script>
+<script>
+  const target = document.querySelector('#target');
+  const source = document.querySelector('#source');
+  let tries = 0;
+  const tick = () => {
+    if (target.getAttribute('src') === replacement && source.getAttribute('srcset') === '') {
+      document.body.dataset.acceptance = 'PASS';
+    } else if (++tries > 150) {
+      document.body.dataset.acceptance = 'FAIL';
+      document.body.dataset.error = 'comma-bearing picture URL was not replaced';
+    } else setTimeout(tick, 20);
+  };
+  tick();
+</script>
+</body>

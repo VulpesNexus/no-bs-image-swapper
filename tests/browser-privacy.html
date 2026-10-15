@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Closed panel privacy check</title>
+<script>
+  const values = new Map([['image-swap-settings-v1', JSON.stringify({
+    enabled: true, showButton: false,
+    rules: [{ id: 'elsewhere', name: 'Private rule', enabled: true, mode: 'url',
+      scope: 'other.example', pattern: 'https://other.example/private.png', selector: '',
+      replacement: 'https://other.example/replacement.png' }],
+    assets: [{ id: 'secret', name: 'private-image.png', bytes: 100 }]
+  })]]);
+  const commands = new Map();
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => values.set(key, value);
+  window.GM_deleteValue = key => values.delete(key);
+  window.GM_registerMenuCommand = (label, callback) => { commands.set(label, callback); return label; };
+  window.GM_unregisterMenuCommand = label => commands.delete(label);
+  window.GM_addValueChangeListener = () => 1;
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+  const nativeAttachShadow = Element.prototype.attachShadow;
+  let capturedImageSwapRoot;
+  Element.prototype.attachShadow = function(options) {
+    const root = nativeAttachShadow.call(this, options);
+    if (this.id === 'image-swap-widget-host') capturedImageSwapRoot = root;
+    return root;
+  };
+</script>
+<script src="../ImageSwap.user.js"></script>
+<body>
+<script>
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const host = () => document.querySelector('#image-swap-widget-host');
+  const pseudo = () => document.querySelector('[data-image-swap-pseudo-rules]');
+  (async () => {
+    await new Promise(resolve => setTimeout(resolve, 40));
+    check(!host() && !pseudo(), 'unrelated page gets no panel or pseudo-style marker');
+    commands.get('Manage image replacements')();
+    check(host() && host().shadowRoot === null && host().textContent === '' && !pseudo(),
+      'open panel is closed and does not expose rule text through its host');
+    check(capturedImageSwapRoot.textContent.includes('Private rule'),
+      'test interception can inspect an open panel');
+    const ui = capturedImageSwapRoot;
+    ui.querySelector('#add').click();
+    ui.querySelector('#scope').value = 'other.example';
+    ui.querySelector('#pattern').value = 'https://other.example/private.png';
+    ui.querySelector('#replacement').value = 'https://other.example/another.png';
+    ui.querySelector('#editor').dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    check(ui.querySelector('#conflictNotice').textContent.includes('Private rule'),
+      'editor conflict names another saved rule');
+    ui.querySelector('#copySource').value = 'elsewhere';
+    ui.querySelector('#copySettings').click();
+    check(ui.querySelector('#copyStatus').textContent.includes('Private rule'),
+      'copy status names the source rule');
+    ui.querySelector('#assetLibraryStatus').textContent = 'Saved private-image.png';
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true,
+      cancelable: true }));
+    const residual = capturedImageSwapRoot.textContent + ' ' +
+      [...ui.querySelectorAll('input, select, img')].map(element =>
+        (element.value || '') + ' ' + (element.getAttribute('src') || '')).join(' ');
+    check(!host() && !pseudo() &&
+      !['Private rule', 'private-image.png', 'other.example', 'private.png',
+        'replacement.png'].some(secret => residual.includes(secret)) &&
+      ui.querySelector('#count').textContent === '' && ui.querySelector('#assetsCount').textContent === '',
+      'closing panel removes its host and clears cached rule details');
+    document.body.dataset.acceptance = 'PASS';
+  })().catch(error => {
+    document.body.dataset.acceptance = 'FAIL';
+    document.body.dataset.error = error.message;
+  });
+</script>
+</body>

@@ -1,0 +1,366 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>No-BS Image Swapper browser UI check</title>
+<script>
+  const original = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="red"/></svg>');
+  const replacement = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="blue"/></svg>');
+  const portrait = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="200"><rect width="100" height="200" fill="green"/></svg>');
+  const longPattern = 'https://images.subdomain.extremely-long-hostname-for-layout-testing.example.com/assets/2026/10/header-logo-retina@2x.png?v=123456';
+  // Insertion order of this Map is the manager's menu order.
+  const commands = new Map();
+  const values = new Map([['image-swap-settings-v1', JSON.stringify({
+    enabled: true, showButton: true, uiPreferencesVersion: 2, buttonCorner: 'bottom-right',
+    rules: [
+      { id: 'first', name: 'First rule', enabled: true, mode: 'selector', scope: '*',
+        pattern: '', selector: '#target', replacement },
+      { id: 'second', name: 'Second rule', enabled: true, mode: 'selector', scope: '*',
+        pattern: '', selector: '#other', replacement },
+      // Layout stress: long unbroken name and hostname, fit, and an overnight schedule.
+      { id: 'long', name: 'Averyveryverylongrulenamewithoutanyspacesatalltoforceoverflowinthepanel',
+        enabled: true, mode: 'url', scope: 'images.subdomain.extremely-long-hostname-for-layout-testing.example.com',
+        pattern: longPattern, selector: '', replacement: 'https://cdn.example.net/replacements/my-version.png',
+        appearance: { fit: 'cover' },
+        schedule: { enabled: true, start: '17:00', end: '05:00', timezone: 'utc', days: [0, 1, 2, 3, 4, 5, 6] } },
+      { id: 'unnamed', name: '', enabled: false, mode: 'url', scope: 'example.com',
+        pattern: 'https://example.com/a/very/long/path/to/an/image/file-name-that-goes-on.jpg?v=1',
+        selector: '', replacement: 'https://cdn.example.net/r.png' }
+    ], assets: []
+  })]]);
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => values.set(key, value);
+  window.GM_deleteValue = key => values.delete(key);
+  window.GM_registerMenuCommand = (label, callback) => { commands.set(label, callback); return label; };
+  window.GM_unregisterMenuCommand = id => commands.delete(id);
+  window.GM_addValueChangeListener = () => 1;
+  // Test-only interception lets this fixture inspect a production closed root.
+  const nativeAttachShadow = Element.prototype.attachShadow;
+  let capturedImageSwapRoot;
+  Element.prototype.attachShadow = function(options) {
+    const root = nativeAttachShadow.call(this, options);
+    if (this.id === 'image-swap-widget-host') capturedImageSwapRoot = root;
+    return root;
+  };
+  // Headless --dump-dom does not reliably advance animation frames.
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+</script>
+<img id="target" alt="target" src="">
+<img id="other" alt="other" src="">
+<div id="background" style="width:40px;height:40px"><span id="backgroundText">Text</span></div>
+<p id="plain">Plain text</p>
+<script>
+  document.querySelector('#target').src = original;
+  document.querySelector('#other').src = original;
+  document.querySelector('#background').style.backgroundImage = 'url("' + original + '")';
+</script>
+<script src="../ImageSwap.user.js"></script>
+<script>
+  const state = document.body.dataset;
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = (predicate, message) => new Promise((resolve, reject) => {
+    let tries = 0;
+    const tick = () => predicate() ? resolve() : ++tries > 150 ? reject(Error(message)) : setTimeout(tick, 20);
+    tick();
+  });
+  const CONTEXT = 'New rule from right-clicked image';
+  const BASE_MENU = ['Pick an image', 'Manage local images', 'Manage image replacements',
+    'Toggle image replacements', 'Toggle floating button'];
+  const menu = () => [...commands.keys()].join(' | ');
+  const near = (a, b, tolerance = 0.5) => Math.abs(a - b) <= tolerance;
+  (async () => {
+    const target = document.querySelector('#target');
+    await waitFor(() => target.getAttribute('src') === replacement, 'initial replacement');
+    const ui = capturedImageSwapRoot;
+    check(ui && document.querySelector('#image-swap-widget-host').shadowRoot === null,
+      'management panel uses a closed shadow root');
+    const where = ' at ' + innerWidth + 'px';
+    check(menu() === BASE_MENU.join(' | '), 'initial menu order without right-click command: ' + menu());
+
+    // Launcher
+    const open = ui.querySelector('#open');
+    check(open.textContent === 'NBSIS', 'floating label');
+    check(/NBSIS/.test(open.getAttribute('aria-label')) && /No-BS Image Swapper/.test(open.getAttribute('aria-label')),
+      'launcher accessible name keeps visible text and full name');
+    const launcherBox = ui.querySelector('#launcher').getBoundingClientRect();
+    check(launcherBox.left >= 0 && launcherBox.right <= innerWidth, 'launcher fits viewport' + where);
+
+    const outsideFocus = document.querySelector('#plain');
+    outsideFocus.tabIndex = 0;
+    outsideFocus.focus();
+    commands.get('Manage image replacements')();
+    check(ui.querySelector('#panel h2').textContent === 'No-BS Image Swapper', 'panel name');
+    const panel = ui.querySelector('#panel');
+    const focusable = [...panel.querySelectorAll('a[href], summary, button:not([disabled]), input:not([disabled]), ' +
+      'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter(element => {
+        if (!element.getClientRects().length || getComputedStyle(element).visibility === 'hidden') return false;
+        for (let ancestor = element.parentElement; ancestor && ancestor !== panel;
+          ancestor = ancestor.parentElement) {
+          if (ancestor.localName === 'details' && !ancestor.open &&
+              !ancestor.querySelector(':scope > summary')?.contains(element)) return false;
+        }
+        return true;
+      });
+    const firstFocus = focusable[0], lastFocus = focusable.at(-1);
+    check(ui.activeElement === firstFocus && focusable.length > 1, 'modal starts at first focusable control');
+    firstFocus.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true,
+      bubbles: true, cancelable: true }));
+    check(ui.activeElement === lastFocus, 'Shift+Tab wraps to last modal control: ' +
+      (ui.activeElement?.id || ui.activeElement?.outerHTML?.slice(0, 80)) + ' vs ' +
+      (lastFocus?.id || lastFocus?.outerHTML?.slice(0, 80)));
+    lastFocus.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    check(ui.activeElement === firstFocus, 'Tab wraps to first modal control');
+    const entries = ui.querySelectorAll('details.entry');
+    check(entries.length === 4 && [...entries].every(entry => !entry.open), 'rules collapsed');
+    entries[0].querySelector('summary').click();
+    check(entries[0].open, 'rule expands');
+    ui.querySelector('#themeMode').value = 'dark';
+    ui.querySelector('#themeMode').dispatchEvent(new Event('change', { bubbles: true }));
+    check(ui.querySelector('details.entry').open, 'rule expansion survives render');
+
+    // Saved-rule layout with every rule expanded.
+    ui.querySelectorAll('details.entry').forEach(entry => { entry.open = true; });
+    check(panel.scrollWidth <= panel.clientWidth, 'panel has no horizontal overflow' + where);
+    for (const entry of ui.querySelectorAll('details.entry')) {
+      const summary = entry.querySelector('summary');
+      const title = entry.querySelector('.entry-title');
+      const box = entry.getBoundingClientRect();
+      const s = summary.getBoundingClientRect(), t = title.getBoundingClientRect();
+      check(getComputedStyle(summary).flexDirection === 'row' && t.left >= s.left + 12 && near(t.top, s.top, 2),
+        'expand arrow sits beside title' + where);
+      check(t.right <= box.right && s.right <= box.right, 'title stays inside rule' + where);
+      for (const child of entry.querySelectorAll('.entry-body > *')) {
+        check(child.getBoundingClientRect().right <= box.right + 0.5, 'rule details stay inside rule' + where);
+      }
+      const items = [...entry.querySelectorAll('.entry-actions > *')];
+      const first = items[0].getBoundingClientRect();
+      check(items.length === 6 && first.width >= 24 && first.height >= 24 && items.every(item => {
+        const r = item.getBoundingClientRect();
+        return near(r.width, first.width) && near(r.height, first.height);
+      }), 'saved-rule actions share one size' + where);
+      for (const button of entry.querySelectorAll('.entry-actions button')) {
+        check(button.type === 'button' && button.getAttribute('aria-label') === button.title &&
+          button.querySelector('svg[aria-hidden="true"]'), 'icon button keeps accessible name');
+      }
+    }
+    const longEntry = ui.querySelector('details.entry[data-id="long"]');
+    check([...longEntry.querySelectorAll('.entry-actions button')].map(b => b.getAttribute('aria-label')).join() ===
+      'Move rule up,Move rule down,Edit rule,Duplicate rule,Delete rule', 'action names and order');
+    const info = longEntry.querySelector('.entry-info');
+    const details = longEntry.querySelector('.entry-details');
+    check(details && details.textContent === 'Fit: cover · 5:00 PM–5:00 AM (UTC)' && !info.contains(details) &&
+      details.getBoundingClientRect().top >= info.getBoundingClientRect().bottom - 0.5,
+      'fit and 12-hour schedule on their own line');
+    check(!info.textContent.includes('Fit:'), 'replacement summary excludes secondary details');
+
+    // Full matching URL only in the hostname hint.
+    const domain = info.querySelector('.entry-domain');
+    const hint = info.querySelector('.entry-hint');
+    const visibleText = longEntry.querySelector('.entry-body').textContent.replace(hint.textContent, '');
+    check(!visibleText.includes(longPattern) && !longEntry.querySelector('summary').textContent.includes('https://'),
+      'full matching URL not in visible summary');
+    check(domain.textContent.startsWith('images.subdomain') && domain.tabIndex === 0 &&
+      ui.getElementById(domain.getAttribute('aria-describedby')) === hint &&
+      hint.textContent === 'Matching URL: ' + longPattern, 'hostname describes matching URL');
+    check(getComputedStyle(hint).display === 'none', 'hint hidden by default');
+    domain.focus();
+    check(getComputedStyle(hint).display !== 'none', 'hint shown on keyboard focus');
+    const h = hint.getBoundingClientRect(), p = panel.getBoundingClientRect();
+    check(h.left >= p.left && h.right <= p.right, 'hint stays inside panel' + where);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    check(getComputedStyle(hint).display === 'none' && !ui.querySelector('#veil').hidden,
+      'Escape dismisses hint before panel');
+    domain.blur();
+    domain.focus();
+    check(getComputedStyle(hint).display !== 'none', 'hint returns on next focus');
+    domain.blur();
+    const unnamed = ui.querySelector('details.entry[data-id="unnamed"]');
+    check(unnamed.querySelector('.entry-title').textContent === 'file-name-that-goes-on.jpg',
+      'unnamed rule title is file name');
+
+    // Help controls
+    const savedHelp = ui.querySelector('[aria-label="Help: Saved rules"]');
+    check(savedHelp?.textContent === '?' && savedHelp.closest('.help-heading'), 'saved rules help placement');
+    savedHelp.scrollIntoView({ block: 'center' });
+    const helpBox = savedHelp.getBoundingClientRect();
+    check(helpBox.width <= 16 && helpBox.height <= 16, 'help control is compact: ' + helpBox.width);
+    check(ui.elementFromPoint(helpBox.right + 3, helpBox.top + helpBox.height / 2) === savedHelp,
+      'help control keeps a larger hit area');
+    const savedHeading = ui.querySelector('.heading.wrap h3').getBoundingClientRect();
+    check(savedHeading.height < 30, 'saved rules heading stays on one line' + where);
+    savedHelp.click();
+    const popover = ui.querySelector('.help-popover:not([hidden])');
+    check(popover?.textContent.includes('Earlier rules take priority') &&
+      popover.textContent.includes('Canvas pixels'), 'combined saved rules help');
+    check(popover.parentNode === ui && popover.getBoundingClientRect().right <= innerWidth + 1,
+      'help popover stays in viewport');
+    const stored = ui.querySelector('#uploadsSection');
+    check(!stored.open, 'stored images starts closed');
+    const storedHelp = ui.querySelector('[aria-label="Help: Stored images"]');
+    storedHelp.click();
+    const storedText = ui.querySelector('.help-popover:not([hidden])')?.textContent || '';
+    check(!stored.open && storedText.includes('userscript manager storage'), 'stored images help does not expand section');
+    check(storedText.includes('up to 10 MiB') && storedText.includes('up to 48 MiB') &&
+      storedText.includes('no storage measurement') && storedText.includes('about 64 MiB'),
+      'stored images help states caps and evidence');
+    const veil = ui.querySelector('#veil');
+    storedHelp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true, cancelable: true }));
+    check(!veil.hidden && !ui.querySelector('.help-popover:not([hidden])'), 'Escape closes help before panel');
+
+    // Editing scrolls the editor heading fully into view, also below a sticky header.
+    const heading = ui.querySelector('#editorHeading');
+    const headingVisible = (top = panel.getBoundingClientRect().top) => {
+      const r = heading.getBoundingClientRect(), q = panel.getBoundingClientRect();
+      return r.top >= top - 0.5 && r.bottom <= q.bottom + 0.5 && r.height > 0;
+    };
+    panel.scrollTop = 0;
+    ui.querySelector('details.entry[data-id="first"] [data-action="edit"]').click();
+    check(heading.textContent === 'Edit rule' && headingVisible(), 'edit reveals editor heading' + where);
+    check(ui.activeElement === ui.querySelector('#replacement'), 'edit focuses replacement field');
+    ui.querySelector('#cancel').click();
+    const sticky = document.createElement('div');
+    sticky.style.cssText = 'position:sticky;top:0;height:44px;z-index:9;background:gray';
+    ui.querySelector('.inner').prepend(sticky);
+    panel.scrollTop = 0;
+    ui.querySelector('details.entry[data-id="long"] [data-action="edit"]').click();
+    check(headingVisible(sticky.getBoundingClientRect().bottom), 'edit heading clears sticky header' + where);
+    ui.querySelector('#cancel').click();
+    panel.scrollTop = 0;
+    ui.querySelector('details.entry[data-id="long"] [data-action="duplicate"]').click();
+    check(heading.textContent === 'Duplicate rule' && headingVisible(sticky.getBoundingClientRect().bottom),
+      'duplicate reveals editor heading' + where);
+    sticky.remove();
+    ui.querySelector('#cancel').click();
+
+    const scope = ui.querySelector('#scope');
+    scope.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 8, clientX: 30, clientY: 30 }));
+    veil.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 8, clientX: 100, clientY: 100 }));
+    check(!veil.hidden, 'drag from field onto backdrop keeps panel open');
+    veil.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 9, clientX: 30, clientY: 30 }));
+    veil.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 9, clientX: 30, clientY: 30 }));
+    check(veil.hidden, 'backdrop click closes panel');
+    check(document.activeElement === outsideFocus, 'closing modal restores previous page focus');
+
+    // Right-click command: listed first only while a valid target is remembered.
+    const pageMenus = [];
+    document.addEventListener('contextmenu', event => pageMenus.push(event.target.id));
+    const rightClick = element => {
+      const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true,
+        button: 2, clientX: 5, clientY: 5 });
+      element.dispatchEvent(event);
+      check(!event.defaultPrevented && pageMenus.at(-1) === element.id,
+        'right-click on #' + element.id + ' keeps browser and site menus');
+    };
+    const contextMenuShown = () => menu() === [CONTEXT, ...BASE_MENU].join(' | ');
+    const contextMenuHidden = () => menu() === BASE_MENU.join(' | ');
+    const hint2 = ui.querySelector('#pickHint');
+    let staleCommand = null;
+    // A manager may still offer the command after it was removed; it must fall back.
+    const expectFallback = async message => {
+      await waitFor(contextMenuHidden, message + ': command removed (' + menu() + ')');
+      staleCommand(new MouseEvent('click'));
+      check(veil.hidden && !hint2.hidden && hint2.textContent.startsWith('No recently'), message);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      check(hint2.hidden && !veil.hidden, 'Escape cancels fallback picker');
+      ui.querySelector('#close').click();
+    };
+    rightClick(document.querySelector('#plain'));
+    check(contextMenuHidden(), 'right-click on non-image adds no command');
+    const inline = document.createElement('img');
+    inline.id = 'large-inline-image';
+    inline.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg"><!--' +
+      'x'.repeat(2200) + '--></svg>');
+    document.body.append(inline);
+    rightClick(inline);
+    commands.get(CONTEXT)(new MouseEvent('click'));
+    check(ui.querySelector('#mode').value === 'selector' && ui.querySelector('#pattern').value === '' &&
+      ui.querySelector('#selector').value === '#large-inline-image',
+      'large inline source suggests a selector without copying bytes into settings');
+    ui.querySelector('#close').click();
+    inline.remove();
+    rightClick(document.querySelector('#backgroundText'));
+    check(contextMenuShown(), 'right-click command listed first: ' + menu());
+    check(!ui.querySelector('[role="menu"]'), 'no custom context menu');
+    staleCommand = commands.get(CONTEXT);
+    commands.get(CONTEXT)(new MouseEvent('click'));
+    check(!veil.hidden && ui.querySelector('#pattern').value.startsWith('data:image/svg+xml,') &&
+      ui.querySelector('#selector').value === '#background', 'command uses right-clicked CSS background');
+    check(contextMenuHidden(), 'command removed after use');
+    ui.querySelector('#close').click();
+    await expectFallback('target is forgotten after use');
+    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2 }));
+    check(contextMenuShown(), 'right-button press lists command before contextmenu');
+    rightClick(target);
+    check(contextMenuShown(), 'repeat right-click keeps one command: ' + menu());
+    rightClick(document.querySelector('#plain'));
+    await expectFallback('right-click elsewhere replaces target');
+    const free = document.createElement('img');
+    free.id = 'free';
+    free.alt = 'free';
+    free.src = original;
+    document.body.append(free);
+    rightClick(free);
+    check(contextMenuShown(), 'new image target listed');
+    free.remove();
+    await expectFallback('removed target is stale');
+    document.body.append(free);
+    rightClick(free);
+    free.src = portrait;
+    await expectFallback('changed image source is stale');
+    rightClick(free);
+    const page = location.href;
+    history.pushState(null, '', '#moved');
+    await expectFallback('same-document navigation makes target stale');
+    history.replaceState(null, '', page);
+    rightClick(free);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    check(contextMenuHidden(), 'primary press removes command at once');
+    await expectFallback('primary press clears target');
+    rightClick(free);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 3 * 60 * 1000;
+    try { await expectFallback('old target expires'); } finally { Date.now = realNow; }
+    commands.get('Pick an image')(new MouseEvent('click'));
+    check(!hint2.hidden && hint2.textContent.startsWith('Click an image'), 'pick command uses default hint');
+    rightClick(target);
+    check(contextMenuHidden(), 'right-click during picker adds no command');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    ui.querySelector('#close').click();
+    await expectFallback('right-click during picker is not remembered');
+    free.remove();
+    rightClick(target);
+    commands.get(CONTEXT)(new MouseEvent('click'));
+    check(!veil.hidden && !ui.querySelector('#editor').hidden, 'command opens new rule');
+    check(ui.querySelector('#pattern').value === original, 'command uses original image URL');
+    check(headingVisible(), 'command editor heading visible' + where);
+    check(ui.querySelector('#fit').closest('#advancedOptions'), 'fit lives in advanced options');
+    const liveHelp = ui.querySelector('[aria-label="Help: Live preview"]');
+    check(liveHelp?.textContent === '?' && liveHelp.closest('.help-heading')?.querySelector('strong'),
+      'live preview help beside title');
+    const reuseHelp = ui.querySelector('[aria-label="Help: Copying settings"]');
+    check(reuseHelp?.textContent === '?' && reuseHelp.closest('.help-heading')?.querySelector('h3'),
+      'reuse help beside title');
+    const assetHelp = ui.querySelector('[aria-label="Help: Stored image to use"]');
+    check(ui.getElementById(assetHelp.getAttribute('aria-controls')).textContent.includes('Maximum 10 MiB per image, 48 MiB total'),
+      'editor upload help states caps');
+    const url = ui.querySelector('#replacement');
+    url.value = portrait;
+    url.dispatchEvent(new Event('input', { bubbles: true }));
+    const image = ui.querySelector('#previewImage');
+    const frame = ui.querySelector('#previewFrame');
+    await waitFor(() => image.naturalWidth === 100 && image.naturalHeight === 200 &&
+      frame.getBoundingClientRect().height > frame.getBoundingClientRect().width * 1.7,
+      'portrait preview follows image aspect ratio');
+    ui.querySelector('#advancedOptions').open = true;
+    const fit = ui.querySelector('#fit');
+    fit.value = 'cover';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => image.style.objectFit === 'contain', 'full thumbnail even with cover fit');
+    check(panel.scrollWidth <= panel.clientWidth, 'editor has no horizontal overflow' + where);
+    state.acceptance = 'PASS';
+  })().catch(error => { state.acceptance = 'FAIL'; state.error = error.message; })
+    .finally(() => {
+      // Reports to tests/browser-ui-widths.html when loaded in a fixed-width frame.
+      if (parent !== window) parent.postMessage({ width: innerWidth, acceptance: state.acceptance,
+        error: state.error || '' }, '*');
+    });
+</script>
