@@ -4,9 +4,9 @@ A userscript that replaces website images by resource URL or CSS selector. Rules
 
 ## Install and update
 
-Install [No-BS-Image-Swapper.user.js](No-BS-Image-Swapper.user.js) in a userscript manager that supports synchronous `GM_*` storage APIs, such as Tampermonkey or Violentmonkey, then reload the pages where it should run. Greasemonkey 4+ is not currently supported.
+Install [No-BS-Image-Swapper.user.js](https://raw.githubusercontent.com/VulpesNexus/no-bs-image-swapper/main/No-BS-Image-Swapper.user.js) from this public repository in a userscript manager that supports synchronous `GM_*` storage APIs, such as Tampermonkey or Violentmonkey, then reload the pages where it should run. Greasemonkey 4+ is not currently supported.
 
-Automatic updates require the repository's script URL to be reachable by your userscript manager. Otherwise, update the installed copy manually.
+The script's update and download URLs point to the public repository's `main` branch. Automatic updates require your userscript manager to reach those URLs and a higher `@version` in a published script. Otherwise, update the installed copy manually.
 
 The script runs on HTTP and HTTPS pages.
 
@@ -28,7 +28,7 @@ This example replaces the globe on the signed-out [Wikipedia homepage](https://w
 | --- | --- |
 | <a href="docs/screenshots/wikipedia-demo/03-saved-rule.png"><img src="docs/screenshots/wikipedia-demo/03-saved-rule.png" width="400" alt="NBSIS panel showing one saved, active Wikipedia rule"></a> | <a href="docs/screenshots/wikipedia-demo/04-replaced-homepage.png"><img src="docs/screenshots/wikipedia-demo/04-replaced-homepage.png" width="400" alt="Signed-out Wikipedia homepage with the blue Wikipedia 25 globe"></a> |
 
-These screenshots came from a disposable test browser with simulated userscript manager storage. They show the page and rule UI; no rule was saved in an installed browser.
+These screenshots came from a disposable test browser with simulated userscript manager storage. They show the page and rule UI; no rule was saved in an installed browser for this example. A separate [installed Tampermonkey check](tests/TAMPERMONKEY.md) covers installation, the manager menu, theme controls, and floating-button persistence.
 
 ## Limits and privacy
 
