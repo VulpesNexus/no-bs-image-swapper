@@ -2,8 +2,6 @@
 
 A userscript that replaces website images by resource URL or CSS selector. Rules can use hosted images or images stored by your userscript manager, and they persist across browser sessions.
 
-Author: Vixen420.
-
 ## Install and update
 
 Install [No-BS-Image-Swapper.user.js](No-BS-Image-Swapper.user.js) in a userscript manager that supports synchronous `GM_*` storage APIs, such as Tampermonkey or Violentmonkey, then reload the pages where it should run. Greasemonkey 4+ is not currently supported.
