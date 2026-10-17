@@ -52,7 +52,7 @@
   document.querySelector('#other').src = original;
   document.querySelector('#background').style.backgroundImage = 'url("' + original + '")';
 </script>
-<script src="../ImageSwap.user.js"></script>
+<script src="../No-BS-Image-Swapper.user.js"></script>
 <script>
   const state = document.body.dataset;
   const check = (condition, message) => { if (!condition) throw Error(message); };
@@ -62,6 +62,7 @@
     tick();
   });
   const CONTEXT = 'New rule from right-clicked image';
+  const CONTEXT_EDIT = 'Edit rule from right-clicked image';
   const BASE_MENU = ['Pick an image', 'Manage local images', 'Manage image replacements',
     'Toggle image replacements', 'Toggle floating button'];
   const menu = () => [...commands.keys()].join(' | ');
@@ -78,6 +79,9 @@
     // Launcher
     const open = ui.querySelector('#open');
     check(open.textContent === 'NBSIS', 'floating label');
+    check(ui.querySelector('#quickToggle').getAttribute('aria-label') === 'Image replacements' &&
+      ui.querySelector('#quickToggle').getAttribute('aria-pressed') === 'true',
+      'floating power control has a stable stateful accessible name');
     check(/NBSIS/.test(open.getAttribute('aria-label')) && /No-BS Image Swapper/.test(open.getAttribute('aria-label')),
       'launcher accessible name keeps visible text and full name');
     const launcherBox = ui.querySelector('#launcher').getBoundingClientRect();
@@ -88,7 +92,20 @@
     outsideFocus.focus();
     commands.get('Manage image replacements')();
     check(ui.querySelector('#panel h2').textContent === 'No-BS Image Swapper', 'panel name');
+    check(ui.querySelector('label.toggle:has(#enabled)').textContent.trim() === 'NBSIS enabled',
+      'main toggle uses the product name');
     const panel = ui.querySelector('#panel');
+    const themeToggle = ui.querySelector('#themeToggle');
+    const close = ui.querySelector('#close');
+    check(themeToggle.getBoundingClientRect().right <= close.getBoundingClientRect().left,
+      'theme bulb sits left of close');
+    const menuBox = themeToggle.getBoundingClientRect();
+    const closeBox = close.getBoundingClientRect();
+    const menuIconBox = themeToggle.querySelector('svg').getBoundingClientRect();
+    check(menuBox.width === closeBox.width && menuBox.height === closeBox.height &&
+      Math.abs((menuBox.left + menuBox.width / 2) - (menuIconBox.left + menuIconBox.width / 2)) < 1 &&
+      Math.abs((menuIconBox.top + menuIconBox.height / 2) - (menuBox.top + menuBox.height / 2)) < 1,
+      'bulb and close have matching hit areas and centered icons');
     const focusable = [...panel.querySelectorAll('a[href], summary, button:not([disabled]), input:not([disabled]), ' +
       'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
       .filter(element => {
@@ -113,8 +130,36 @@
     check(entries.length === 4 && [...entries].every(entry => !entry.open), 'rules collapsed');
     entries[0].querySelector('summary').click();
     check(entries[0].open, 'rule expands');
-    ui.querySelector('#themeMode').value = 'dark';
-    ui.querySelector('#themeMode').dispatchEvent(new Event('change', { bubbles: true }));
+    const initialTheme = themeToggle.dataset.resolved;
+    check(/^Theme: Automatic \((Light|Dark)\)\. Click for (Light|Dark)\. Shift\+click to disable Automatic\.$/
+      .test(themeToggle.title) && themeToggle.title === themeToggle.getAttribute('aria-label'),
+      'automatic theme hint names the current state and offers disabling Automatic');
+    const badge = getComputedStyle(themeToggle, '::after');
+    check(badge.content === '"A"' && badge.fontSize === '8px' && badge.right === '1px',
+      'automatic badge is small and nudged inward');
+    themeToggle.focus();
+    themeToggle.click();
+    check(themeToggle.dataset.resolved !== initialTheme &&
+      themeToggle.dataset.mode === themeToggle.dataset.resolved &&
+      /^Theme: (Light|Dark)\. Click for (Light|Dark)\. Shift\+click for Automatic\.$/
+        .test(themeToggle.title) && themeToggle.title === themeToggle.getAttribute('aria-label') &&
+      themeToggle.querySelector('svg').getBoundingClientRect().width === menuIconBox.width,
+      'plain click toggles theme without changing icon geometry');
+    themeToggle.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    check(themeToggle.dataset.mode === 'auto' &&
+      themeToggle.getAttribute('aria-label').includes('Automatic') &&
+      ui.activeElement === themeToggle,
+      'Shift+click restores automatic theme and keeps focus on bulb');
+    const automaticResolved = themeToggle.dataset.resolved;
+    themeToggle.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    check(themeToggle.dataset.mode === automaticResolved &&
+      themeToggle.dataset.resolved === automaticResolved &&
+      themeToggle.title.includes('Shift+click for Automatic.'),
+      'Shift+click disables automatic mode without changing the visible theme');
+    themeToggle.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    check(themeToggle.dataset.mode === 'auto' &&
+      themeToggle.title.includes('Shift+click to disable Automatic.'),
+      'Shift+click can restore automatic mode again');
     check(ui.querySelector('details.entry').open, 'rule expansion survives render');
 
     // Saved-rule layout with every rule expanded.
@@ -187,8 +232,14 @@
       'help control keeps a larger hit area');
     const savedHeading = ui.querySelector('.heading.wrap h3').getBoundingClientRect();
     check(savedHeading.height < 30, 'saved rules heading stays on one line' + where);
+    const savedPopover = ui.getElementById(savedHelp.getAttribute('aria-controls'));
+    savedPopover.style.fontSize = '100px';
     savedHelp.click();
     const popover = ui.querySelector('.help-popover:not([hidden])');
+    check(popover.scrollHeight > popover.clientHeight &&
+      popover.getBoundingClientRect().bottom <= innerHeight - 11,
+      'long help stays scrollable inside a short viewport');
+    savedPopover.style.fontSize = '';
     check(popover?.textContent.includes('Earlier rules take priority') &&
       popover.textContent.includes('Canvas pixels'), 'combined saved rules help');
     check(popover.parentNode === ui && popover.getBoundingClientRect().right <= innerWidth + 1,
@@ -250,7 +301,7 @@
       check(!event.defaultPrevented && pageMenus.at(-1) === element.id,
         'right-click on #' + element.id + ' keeps browser and site menus');
     };
-    const contextMenuShown = () => menu() === [CONTEXT, ...BASE_MENU].join(' | ');
+    const contextMenuShown = (label = CONTEXT) => menu() === [label, ...BASE_MENU].join(' | ');
     const contextMenuHidden = () => menu() === BASE_MENU.join(' | ');
     const hint2 = ui.querySelector('#pickHint');
     let staleCommand = null;
@@ -288,9 +339,9 @@
     ui.querySelector('#close').click();
     await expectFallback('target is forgotten after use');
     target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2 }));
-    check(contextMenuShown(), 'right-button press lists command before contextmenu');
+    check(contextMenuShown(CONTEXT_EDIT), 'right-button press offers editing for an active replacement');
     rightClick(target);
-    check(contextMenuShown(), 'repeat right-click keeps one command: ' + menu());
+    check(contextMenuShown(CONTEXT_EDIT), 'repeat right-click keeps one edit command: ' + menu());
     rightClick(document.querySelector('#plain'));
     await expectFallback('right-click elsewhere replaces target');
     const free = document.createElement('img');
@@ -320,7 +371,9 @@
     Date.now = () => realNow() + 3 * 60 * 1000;
     try { await expectFallback('old target expires'); } finally { Date.now = realNow; }
     commands.get('Pick an image')(new MouseEvent('click'));
-    check(!hint2.hidden && hint2.textContent.startsWith('Click an image'), 'pick command uses default hint');
+    check(!hint2.hidden && hint2.textContent.startsWith('Click an image') &&
+      hint2.querySelector('em')?.textContent === 'Esc',
+      'pick command uses default hint with an italic key name');
     rightClick(target);
     check(contextMenuHidden(), 'right-click during picker adds no command');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -328,14 +381,83 @@
     await expectFallback('right-click during picker is not remembered');
     free.remove();
     rightClick(target);
-    commands.get(CONTEXT)(new MouseEvent('click'));
-    check(!veil.hidden && !ui.querySelector('#editor').hidden, 'command opens new rule');
-    check(ui.querySelector('#pattern').value === original, 'command uses original image URL');
+    check(contextMenuShown(CONTEXT_EDIT), 'active replacement offers edit command');
+    commands.get(CONTEXT_EDIT)(new MouseEvent('click'));
+    check(!veil.hidden && !ui.querySelector('#editor').hidden && heading.textContent === 'Edit rule',
+      'command edits the existing rule');
+    check(ui.querySelector('#selector').value === '#target' && ui.querySelector('#ruleName').value === 'First rule',
+      'edit command loads the saved rule');
     check(headingVisible(), 'command editor heading visible' + where);
     check(ui.querySelector('#fit').closest('#advancedOptions'), 'fit lives in advanced options');
+    const appearance = ui.querySelector('#appearanceOptions');
+    check(appearance?.closest('#advancedOptions') &&
+      ['fit', 'positionX', 'blend', 'opacity', 'targetWidth', 'rotation', 'mirror']
+        .every(id => appearance.contains(ui.querySelector('#' + id))) &&
+      appearance.nextElementSibling.textContent === 'Conditions',
+      'appearance is a subsection of advanced options');
+    check(ui.querySelector('#blend').closest('.field-grid') ===
+      ui.querySelector('#opacity').closest('.field-grid') &&
+      ui.querySelector('#opacity').compareDocumentPosition(ui.querySelector('#positionX')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'blend and opacity share a row above alignment');
+    const advancedForLabels = ui.querySelector('#advancedOptions');
+    const advancedLabelState = advancedForLabels.open;
+    advancedForLabels.open = true;
+    const blendLabelBox = ui.querySelector('label[for="blend"]').getBoundingClientRect();
+    const opacityLabelBox = ui.querySelector('label[for="opacity"]').getBoundingClientRect();
+    check(Math.abs(blendLabelBox.top - opacityLabelBox.top) < 3,
+      'wrapped help label aligns with its neighboring grid label');
+    advancedForLabels.open = advancedLabelState;
+    check(ui.querySelector('#uploadInput').closest('.upload-box'), 'upload control is framed');
+    check(!ui.querySelector('#assetPreview') &&
+      ui.querySelector('.live-preview-area').previousElementSibling.id === 'localImageField',
+      'single preview follows replacement source');
+    check(ui.querySelector('#reuseSettings').previousElementSibling.id === 'advancedOptions',
+      'reuse settings follows advanced options');
+    const labelHelp = ui.querySelector('[aria-label="Help: Display name (optional)"]');
+    check(labelHelp?.closest('.help-label-row')?.querySelector('label')?.htmlFor === 'ruleName' &&
+      Math.round(labelHelp.getBoundingClientRect().width) === 13,
+      'small help button aligns with visible field label');
     const liveHelp = ui.querySelector('[aria-label="Help: Live preview"]');
     check(liveHelp?.textContent === '?' && liveHelp.closest('.help-heading')?.querySelector('strong'),
       'live preview help beside title');
+    check(ui.getElementById(liveHelp.getAttribute('aria-controls')).querySelector('em')?.textContent === 'Cancel',
+      'help prose preserves command italics');
+    const fitHelp = ui.querySelector('[aria-label="Help: How the replacement fits"]');
+    check(['Contain', 'Cover'].every(command =>
+      [...ui.getElementById(fitHelp.getAttribute('aria-controls')).querySelectorAll('em')]
+        .some(em => em.textContent === command)) &&
+      ui.getElementById(fitHelp.getAttribute('aria-controls')).textContent.includes('dim controls'),
+      'fit help explains dimmed options and italicizes named choices');
+    const previewHelp = ui.querySelector('[aria-label="Help: Page preview"]');
+    check(previewHelp && ui.querySelector('#previewOnPage').closest('.preview-actions') &&
+      ui.querySelector('#previewView').textContent === 'Hide NBSIS interface' &&
+      previewHelp.getBoundingClientRect().right < ui.querySelector('#previewView').getBoundingClientRect().left,
+      'page preview toggle and help sit left of interface button');
+    check(ui.querySelector('#scheduleTimezone').compareDocumentPosition(ui.querySelector('#scheduleStart')) &
+      Node.DOCUMENT_POSITION_FOLLOWING && ui.querySelector('#scheduleFrom').placeholder === 'dd/mm/yyyy' &&
+      ui.querySelector('#scheduleFromPicker').type === 'date' &&
+      ui.querySelector('#scheduleUntilPicker').type === 'date',
+      'time zone precedes hours and date entry keeps calendar pickers');
+    const advancedWasOpen = ui.querySelector('#advancedOptions').open;
+    ui.querySelector('#advancedOptions').open = true;
+    ui.querySelector('#conditionMode').value = 'scheduled';
+    ui.querySelector('#conditionMode').dispatchEvent(new Event('change', { bubbles: true }));
+    const dateTextBox = ui.querySelector('#scheduleFrom').getBoundingClientRect();
+    const datePickerBox = ui.querySelector('#scheduleFromCalendar').getBoundingClientRect();
+    check(datePickerBox.left > dateTextBox.left && datePickerBox.right <= dateTextBox.right &&
+      Math.abs((datePickerBox.top + datePickerBox.height / 2) -
+        (dateTextBox.top + dateTextBox.height / 2)) < 1,
+      'calendar button is centered inside the date field: text=' +
+        [dateTextBox.x, dateTextBox.y, dateTextBox.width, dateTextBox.height].join(',') +
+        ' picker=' + [datePickerBox.x, datePickerBox.y, datePickerBox.width, datePickerBox.height].join(','));
+    check(getComputedStyle(ui.querySelector('#scheduleFromPicker')).opacity === '0' &&
+      ui.querySelector('#scheduleFromPicker').tabIndex === -1 &&
+      ui.querySelector('#scheduleFromCalendar').getAttribute('aria-label') ===
+        'Choose first date from calendar',
+      'hidden native calendar input has one visible keyboard-accessible button');
+    ui.querySelector('#conditionMode').value = 'always';
+    ui.querySelector('#conditionMode').dispatchEvent(new Event('change', { bubbles: true }));
+    ui.querySelector('#advancedOptions').open = advancedWasOpen;
     const reuseHelp = ui.querySelector('[aria-label="Help: Copying settings"]');
     check(reuseHelp?.textContent === '?' && reuseHelp.closest('.help-heading')?.querySelector('h3'),
       'reuse help beside title');
@@ -347,15 +469,82 @@
     url.dispatchEvent(new Event('input', { bubbles: true }));
     const image = ui.querySelector('#previewImage');
     const frame = ui.querySelector('#previewFrame');
+    await new Promise(resolve => setTimeout(resolve, 120));
     await waitFor(() => image.naturalWidth === 100 && image.naturalHeight === 200 &&
-      frame.getBoundingClientRect().height > frame.getBoundingClientRect().width * 1.7,
-      'portrait preview follows image aspect ratio');
+      image.style.objectFit === 'fill' &&
+      frame.getBoundingClientRect().width <= panel.clientWidth,
+      'keep styling samples the matched image box');
     ui.querySelector('#advancedOptions').open = true;
     const fit = ui.querySelector('#fit');
+    fit.value = 'contain';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => image.style.objectFit === 'contain',
+      'contain differs from website styling in the sample');
     fit.value = 'cover';
     fit.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => image.style.objectFit === 'contain', 'full thumbnail even with cover fit');
+    await waitFor(() => image.style.objectFit === 'cover' &&
+      frame.getBoundingClientRect().width <= panel.clientWidth,
+      'sample preview shows cover cropping');
+    fit.value = 'none';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => image.style.objectFit === 'none' &&
+      frame.getBoundingClientRect().width <= 312 &&
+      ui.querySelector('#previewDimensions').textContent.includes('Scaled sample'),
+      'natural size is displayed within a scaled sample of the target box');
+    fit.value = 'cover';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    ui.querySelector('#positionX').value = '28';
+    ui.querySelector('#positionX').dispatchEvent(new Event('input', { bubbles: true }));
+    await waitFor(() => image.style.objectPosition === '28% 50%',
+      'sample preview shows alignment changes');
+    fit.value = 'fill';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    check(ui.querySelector('#positionX').disabled && ui.querySelector('#positionX').value === '28',
+      'stretch disables alignment without clearing custom value');
+    fit.value = 'cover';
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
+    check(!ui.querySelector('#positionX').disabled && ui.querySelector('#positionX').value === '28',
+      'switching fit restores alignment');
+    ui.querySelector('#rotation').value = '90';
+    ui.querySelector('#mirror').value = 'horizontal';
+    ui.querySelector('#mirror').dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => image.style.rotate === '90deg' && image.style.scale === '-1 1',
+      'sample preview shows rotation and mirroring');
+    ui.querySelector('#scope').value = '*';
+    ui.querySelector('#scope').dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await waitFor(() => !ui.querySelector('#previewView').disabled, 'page preview can start');
+    ui.querySelector('#previewView').click();
+    const dock = ui.querySelector('#previewDock');
+    check(!dock.hidden && veil.hidden &&
+      dock.querySelector('.hint').getBoundingClientRect().left >=
+        ui.querySelector('#previewReturn').getBoundingClientRect().right &&
+      dock.querySelector('.hint br') && dock.querySelector('.hint em')?.textContent === 'Esc' &&
+      dock.querySelector('.hint').textContent === 'Unsaved rule preview.Press Esc to return.',
+      'two-line preview hint sits right of return button');
+    ui.querySelector('#previewReturn').click();
+    check(dock.hidden && !veil.hidden, 'return to editor restores panel');
+    ui.querySelector('#conditionMode').value = 'scheduled';
+    ui.querySelector('#conditionMode').dispatchEvent(new Event('change', { bubbles: true }));
+    const weekdays = ui.querySelector('#weekdayOptions');
+    check(weekdays.getAttribute('role') === 'group' &&
+      weekdays.getAttribute('aria-labelledby') === 'weekdayHeading',
+      'weekday checkboxes have an accessible group label');
+    const dayLabels = [...weekdays.querySelectorAll('label')];
+    const row = weekdays.getBoundingClientRect();
+    check(dayLabels.every(label => { const box = label.getBoundingClientRect();
+      return box.left >= row.left - 1 && box.right <= row.right + 1; }) &&
+      Math.abs(dayLabels.at(-1).getBoundingClientRect().right - row.right) < 3,
+      'weekdays spread across the available width' + where);
     check(panel.scrollWidth <= panel.clientWidth, 'editor has no horizontal overflow' + where);
+    const firstDate = ui.querySelector('#scheduleFrom');
+    const firstPicker = ui.querySelector('#scheduleFromPicker');
+    firstPicker.value = '2026-10-17';
+    firstPicker.dispatchEvent(new Event('change', { bubbles: true }));
+    check(firstDate.value === '17/10/2026', 'calendar selection fills day/month/year text');
+    firstDate.value = '18/10/2026';
+    firstDate.dispatchEvent(new Event('input', { bubbles: true }));
+    check(firstPicker.value === '2026-10-18', 'typed date updates native calendar');
     state.acceptance = 'PASS';
   })().catch(error => { state.acceptance = 'FAIL'; state.error = error.message; })
     .finally(() => {

@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Appearance controls and background placement</title>
+<style>
+  #wall { width: 280px; height: 170px; background-position: left top; }
+  #photo { width: 100px; height: 50px; object-fit: none; }
+</style>
+<script>
+  const picture = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect width="100" height="50" fill="red"/></svg>');
+  const replacement = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="200"><rect width="100" height="200" fill="blue"/></svg>');
+  const commands = new Map();
+  const rules = [
+    { id: 'wall-rule', name: 'Background rule', enabled: true, mode: 'selector', scope: '*',
+      pattern: '', selector: '#wall', replacement,
+      appearance: { fit: 'cover', x: 50, y: 50, opacity: 40, width: 250,
+        rotation: 45, mirror: 'horizontal' } },
+    { id: 'photo-rule', name: 'Image rule', enabled: true, mode: 'selector', scope: '*',
+      pattern: '', selector: '#photo', replacement,
+      appearance: { fit: 'cover', x: 35, y: 65, width: 140, rotation: 90, mirror: 'horizontal' } }
+  ];
+  const values = new Map([['image-swap-settings-v1', JSON.stringify({
+    enabled: true, showButton: false, uiPreferencesVersion: 2, rules, assets: []
+  })]]);
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => values.set(key, value);
+  window.GM_deleteValue = key => values.delete(key);
+  window.GM_registerMenuCommand = (label, callback) => (commands.set(label, callback), label);
+  window.GM_unregisterMenuCommand = label => commands.delete(label);
+  window.GM_addValueChangeListener = () => 1;
+  window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+  const attachShadow = Element.prototype.attachShadow;
+  let ui;
+  Element.prototype.attachShadow = function (options) {
+    const root = attachShadow.call(this, options);
+    if (this.id === 'image-swap-widget-host') ui = root;
+    return root;
+  };
+</script>
+<body>
+  <div id="wall" style="background-image:url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22100%22%20height%3D%2250%22%3E%3C%2Fsvg%3E')">Text stays upright</div>
+  <img id="photo" alt="Photo target">
+  <script>document.querySelector('#photo').src = picture;</script>
+  <script src="../No-BS-Image-Swapper.user.js"></script>
+  <script>
+    let tries = 0;
+    const settle = () => new Promise(resolve => setTimeout(resolve, 180));
+    const change = (element, value) => {
+      element.value = value;
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const check = async () => {
+      try {
+        const wall = document.querySelector('#wall');
+        const photo = document.querySelector('#photo');
+        if (!wall.style.backgroundImage.includes('blue') || !photo.src.includes('blue')) {
+          if (++tries < 100) return setTimeout(check, 20);
+        }
+        if (getComputedStyle(wall).backgroundPosition !== '50% 50%')
+          throw Error('replacement background is not centered by default: ' +
+            getComputedStyle(wall).backgroundPosition + ', inline ' + wall.style.backgroundPosition);
+        if (wall.style.width || wall.style.opacity || wall.style.rotate || wall.style.scale)
+          throw Error('image-only appearance changed the background container');
+        if (photo.style.objectPosition !== '35% 65%' || photo.style.rotate !== '90deg' ||
+            photo.style.scale !== '-1 1' || photo.style.width !== '140px')
+          throw Error('image alignment, size, rotation, or mirror missing');
+        commands.get('Manage image replacements')();
+        ui.querySelector('.entry[data-id="wall-rule"] button[data-action="edit"]').click();
+        if (ui.querySelector('#positionX').disabled || ui.querySelector('#positionX').value !== '50' ||
+            !['opacity', 'targetWidth', 'targetHeight', 'maxWidth', 'maxHeight', 'rotation', 'mirror']
+              .every(id => ui.querySelector('#' + id).disabled) ||
+            ui.querySelector('#rotation').value !== '45' || ui.querySelector('#targetWidth').value !== '250')
+          throw Error('background-only controls were not dimmed with their values preserved');
+        const fit = ui.querySelector('#fit');
+        const stage = ui.querySelector('#previewStage');
+        change(fit, 'original');
+        await settle();
+        if (stage.style.backgroundSize !== 'auto' || stage.style.backgroundPosition !== '50% 50%')
+          throw Error('website background style or alignment missing from preview');
+        change(fit, 'none');
+        await settle();
+        if (stage.style.backgroundSize !== 'auto')
+          throw Error('natural background size should match website auto size');
+        change(ui.querySelector('#positionX'), '20');
+        await settle();
+        if (stage.style.backgroundPosition !== '20% 50%' ||
+            getComputedStyle(wall).backgroundPosition !== '20% 50%')
+          throw Error('background alignment nudge did not match live page preview: stage=' +
+            stage.style.backgroundPosition + ', page=' + getComputedStyle(wall).backgroundPosition +
+            ', status=' + ui.querySelector('#previewStatus').textContent +
+            ', checked=' + ui.querySelector('#previewOnPage').checked);
+        ui.querySelector('.entry[data-id="photo-rule"] button[data-action="edit"]').click();
+        change(ui.querySelector('#fit'), 'original');
+        await settle();
+        const image = ui.querySelector('#previewImage');
+        if (image.style.objectFit !== 'none')
+          throw Error('website image fit was captured after replacement instead of before it');
+        if (ui.querySelector('#previewStage').style.height !== '50px')
+          throw Error('preview box used the rotated bounding rectangle instead of the image box');
+        change(ui.querySelector('#fit'), 'none');
+        await settle();
+        if (image.style.objectFit !== 'none')
+          throw Error('natural image fit should match website none fit');
+        change(ui.querySelector('#positionY'), '15');
+        await settle();
+        if (image.style.objectPosition !== '35% 15%' ||
+            getComputedStyle(photo).objectPosition !== '35% 15%')
+          throw Error('image alignment nudge did not match live page preview');
+        document.body.dataset.acceptance = 'PASS';
+      } catch (error) {
+        document.body.dataset.acceptance = 'FAIL';
+        document.body.dataset.error = error.message;
+      }
+    };
+    setTimeout(check, 30);
+  </script>
+</body>

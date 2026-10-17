@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'ImageSwap.user.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'No-BS-Image-Swapper.user.js'), 'utf8');
 const start = source.indexOf('  function candidatesFromSrcset(');
 const end = source.indexOf('  function imageURLs(', start);
 assert.ok(start >= 0 && end > start, 'srcset parser must exist');

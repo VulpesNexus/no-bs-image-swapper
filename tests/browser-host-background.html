@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Full-screen host background check</title>
+<style>
+  body { background: white; color: black; }
+  div { background: rgb(12, 14, 18) !important; }
+</style>
+<script>
+  const values = new Map([['image-swap-settings-v1', JSON.stringify({
+    enabled: true, showButton: true, uiPreferencesVersion: 2, rules: [], assets: []
+  })]]);
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => values.set(key, value);
+  window.GM_deleteValue = key => values.delete(key);
+  window.GM_registerMenuCommand = () => 1;
+  window.GM_unregisterMenuCommand = () => {};
+  window.GM_addValueChangeListener = () => 1;
+</script>
+<body>
+  <main><h1>Site content remains visible</h1><p>No replacement rules are active.</p></main>
+  <script src="../No-BS-Image-Swapper.user.js"></script>
+  <script>
+    (() => {
+      try {
+        const host = document.getElementById('image-swap-widget-host');
+        if (!host) throw Error('floating-button host was not mounted');
+        if (getComputedStyle(host).backgroundColor !== 'rgba(0, 0, 0, 0)') {
+          throw Error('full-screen host has an opaque site background');
+        }
+        if (getComputedStyle(host).backgroundImage !== 'none') {
+          throw Error('full-screen host has a site background image');
+        }
+        document.body.dataset.acceptance = 'PASS';
+      } catch (error) {
+        document.body.dataset.acceptance = 'FAIL';
+        document.body.dataset.error = error.message;
+      }
+    })();
+  </script>
+</body>

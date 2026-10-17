@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'ImageSwap.user.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'No-BS-Image-Swapper.user.js'), 'utf8');
 const slice = (from, to) => {
   const start = source.indexOf(from);
   const end = source.indexOf(to, start);
@@ -34,8 +34,8 @@ test('schedule summary keeps hours, time zone, days, and dates', () => {
   assert.equal(context.scheduleText({ ...base, days: [0, 1, 5] }), '5:00 PM–5:00 AM (UTC) · Mon, Fri, Sun');
   assert.equal(context.scheduleText({ ...base, days: [] }), '5:00 PM–5:00 AM (UTC) · No days');
   assert.equal(context.scheduleText({ ...base, from: '2026-10-12', until: '2026-10-19' }),
-    '5:00 PM–5:00 AM (UTC) · 2026-10-12 to 2026-10-19');
-  assert.equal(context.scheduleText({ ...base, until: '2026-10-19' }), '5:00 PM–5:00 AM (UTC) · Until 2026-10-19');
+    '5:00 PM–5:00 AM (UTC) · 12/10/2026 to 19/10/2026');
+  assert.equal(context.scheduleText({ ...base, until: '2026-10-19' }), '5:00 PM–5:00 AM (UTC) · Until 19/10/2026');
 });
 
 test('unnamed URL rules show a file name instead of the full URL', () => {

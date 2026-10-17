@@ -4,12 +4,13 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'ImageSwap.user.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'No-BS-Image-Swapper.user.js'), 'utf8');
 const start = source.indexOf('  const MENU_COMMANDS = [');
 const end = source.indexOf('  let dragState = null;', start);
 assert.ok(start >= 0 && end > start, 'menu command code must exist');
 const ORDER = ['New rule from right-clicked image', 'Pick an image', 'Manage local images',
   'Manage image replacements', 'Toggle image replacements', 'Toggle floating button'];
+const EDIT = 'Edit rule from right-clicked image';
 
 // The manager's menu, in display order. Like Tampermonkey, ids differ from labels.
 function harness({ unregister = true } = {}) {
@@ -21,6 +22,7 @@ function harness({ unregister = true } = {}) {
     pickContextTarget() {}, startPicker() {}, openPanel() {}, saveSettings() {}, $: () => ({}),
     settings: {},
     currentContextTarget: () => context.target,
+    ruleForTarget: target => target?.existing ? { id: 'saved' } : null,
     GM_registerMenuCommand(label, callback, options) {
       const id = 'cmd-' + nextId++;
       menu.push({ id, label, options });
@@ -76,6 +78,17 @@ test('the menu changes only when the target state flips', () => {
   assert.deepEqual(log.slice(count), ['-New rule from right-clicked image']);
 });
 
+test('an active replacement offers edit and returns to new for another image', () => {
+  const { context, labels } = harness();
+  context.syncMenuCommands();
+  context.target = { existing: true };
+  context.syncMenuCommands();
+  assert.deepEqual(labels(), [EDIT, ...ORDER.slice(1)]);
+  context.target = {};
+  context.syncMenuCommands();
+  assert.deepEqual(labels(), ORDER);
+});
+
 test('without GM_unregisterMenuCommand every command stays listed in order', () => {
   const { context, labels, log } = harness({ unregister: false });
   context.syncMenuCommands();
@@ -83,6 +96,6 @@ test('without GM_unregisterMenuCommand every command stays listed in order', () 
   context.syncMenuCommands();
   context.target = null;
   context.syncMenuCommands();
-  assert.deepEqual(labels(), ORDER);
+  assert.deepEqual(labels(), ['Edit or create rule from right-clicked image', ...ORDER.slice(1)]);
   assert.equal(log.length, ORDER.length);
 });

@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'ImageSwap.user.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'No-BS-Image-Swapper.user.js'), 'utf8');
 const start = source.indexOf('  function validClock(');
 const end = source.indexOf('  function targetsMayIntersect(', start);
 assert.ok(start >= 0 && end > start, 'schedule functions must exist');
@@ -28,4 +28,12 @@ test('overlap warning respects exclusive end time', () => {
   const nextMorning = { enabled: true, timezone: 'utc', days: [2], start: '06:00', end: '08:00' };
   assert.equal(context.scheduleMayIntersect(mondayNight, nextMorning).overlaps, false);
   assert.equal(context.scheduleMayIntersect(mondayNight, { ...nextMorning, start: '05:00' }).overlaps, true);
+});
+
+test('display dates use day/month/year while stored dates remain ISO', () => {
+  assert.equal(context.parseDisplayDate('12/10/2026'), '2026-10-12');
+  assert.equal(context.formatDisplayDate('2026-10-12'), '12/10/2026');
+  assert.equal(context.parseDisplayDate('31/02/2026'), null);
+  assert.equal(context.parseDisplayDate('2026-10-12'), null);
+  assert.equal(context.parseDisplayDate(''), '');
 });

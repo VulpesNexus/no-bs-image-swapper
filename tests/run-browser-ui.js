@@ -15,7 +15,9 @@ if (!browser || !fs.existsSync(browser)) {
 const runs = [['browser-ui.html', '1000,900'], ['browser-ui.html', '500,700'],
   ['browser-ui-widths.html', '1000,900'], ['browser-svg-xlink.html', '1000,900'],
   ['browser-asset-deletion.html', '1000,900'], ['browser-privacy.html', '1000,900'],
-  ['browser-srcset-picture.html', '1000,900']];
+  ['browser-srcset-picture.html', '1000,900'],
+  ['browser-appearance.html', '1000,900'],
+  ['browser-host-background.html', '1000,900']];
 
 function run(page, windowSize) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'no-bs-image-swapper-browser-'));

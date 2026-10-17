@@ -1,9 +1,12 @@
 // ==UserScript==
-// @name         Image Swap
-// @namespace    https://example.invalid/image-swap
-// @version      1.5.1
+// @name         No-BS Image Swapper
+// @namespace    https://github.com/VulpesNexus/no-bs-image-swapper
+// @version      1.8.0
 // @description  Persistent image replacement with named rules, reusable settings, overlap warnings, and live previews.
-// @author       Local
+// @author       VulpesNexus
+// @homepageURL  https://github.com/VulpesNexus/no-bs-image-swapper
+// @updateURL   https://raw.githubusercontent.com/VulpesNexus/no-bs-image-swapper/main/No-BS-Image-Swapper.user.js
+// @downloadURL https://raw.githubusercontent.com/VulpesNexus/no-bs-image-swapper/main/No-BS-Image-Swapper.user.js
 // @match        *://*/*
 // @run-at       document-idle
 // @noframes
@@ -49,6 +52,7 @@
   const BG_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi;
   const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   const FIT_MODES = ['original', 'contain', 'cover', 'fill', 'scale-down', 'none'];
+  const MIRROR_MODES = ['none', 'horizontal', 'vertical', 'both'];
   const BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
     'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion',
     'hue', 'saturation', 'color', 'luminosity'];
@@ -97,7 +101,9 @@
       width: numericSetting(a.width, 0, 0, 10000),
       height: numericSetting(a.height, 0, 0, 10000),
       maxWidth: numericSetting(a.maxWidth, 0, 0, 10000),
-      maxHeight: numericSetting(a.maxHeight, 0, 0, 10000)
+      maxHeight: numericSetting(a.maxHeight, 0, 0, 10000),
+      rotation: numericSetting(a.rotation, 0, -360, 360),
+      mirror: MIRROR_MODES.includes(a.mirror) ? a.mirror : 'none'
     };
   }
 
@@ -110,6 +116,19 @@
     const [y, m, d] = value.split('-').map(Number);
     const date = new Date(Date.UTC(y, m - 1, d));
     return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
+
+  function parseDisplayDate(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+    const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
+    if (!match) return null;
+    const iso = match[3] + '-' + match[2] + '-' + match[1];
+    return validDate(iso) ? iso : null;
+  }
+
+  function formatDisplayDate(value) {
+    return validDate(value) ? value.slice(8, 10) + '/' + value.slice(5, 7) + '/' + value.slice(0, 4) : '';
   }
 
   function normalizeSchedule(value) {
@@ -180,9 +199,10 @@
       parts.push(c.days.length ? [1, 2, 3, 4, 5, 6, 0].filter(day => c.days.includes(day))
         .map(day => WEEKDAY_NAMES[day]).join(', ') : 'No days');
     }
-    if (c.from && c.until) parts.push(c.from === c.until ? 'On ' + c.from : c.from + ' to ' + c.until);
-    else if (c.from) parts.push('From ' + c.from);
-    else if (c.until) parts.push('Until ' + c.until);
+    if (c.from && c.until) parts.push(c.from === c.until ? 'On ' + formatDisplayDate(c.from) :
+      formatDisplayDate(c.from) + ' to ' + formatDisplayDate(c.until));
+    else if (c.from) parts.push('From ' + formatDisplayDate(c.from));
+    else if (c.until) parts.push('Until ' + formatDisplayDate(c.until));
     return parts.join(' · ');
   }
 
@@ -316,6 +336,9 @@
   let pickerActive = false;
   let hoveredTarget = null;
   let editingId = null;
+  let editingTargetKind = null;
+  let editingTargetElement = null;
+  let editingTargetStyle = null;
   let panelReturnFocus = null;
   let observer;
   let svgHrefObserver;
@@ -504,7 +527,6 @@
         $('replacementType').value = 'local';
         setReplacementMode();
         $('assetChoice').value = id;
-        showAssetPreview();
         scheduleDraftPreview();
       }
       const success = 'Saved ' + file.name + ' in userscript storage.';
@@ -705,9 +727,14 @@
     return 'auto';
   }
 
+  function mirrorScale(mirror) {
+    return (mirror === 'horizontal' || mirror === 'both' ? -1 : 1) + ' ' +
+      (mirror === 'vertical' || mirror === 'both' ? -1 : 1);
+  }
+
   function applyElementAppearance(entry, element, a) {
     if (element.localName === 'image' && element.namespaceURI === 'http://www.w3.org/2000/svg') {
-      if (a.fit !== 'original') {
+      if (a.fit !== 'original' || a.x !== 50 || a.y !== 50) {
         const pos = axis => axis < 34 ? 'Min' : axis > 66 ? 'Max' : 'Mid';
         const align = 'x' + pos(a.x) + 'Y' + pos(a.y);
         const preserve = a.fit === 'fill' ? 'none' : align + ' ' + (a.fit === 'cover' ? 'slice' : 'meet');
@@ -715,7 +742,7 @@
       }
     } else {
       if (a.fit !== 'original') recordStyle(entry, element, 'object-fit', a.fit);
-      if (a.fit !== 'original' || a.x !== 50 || a.y !== 50) {
+      if (a.fit !== 'fill' && (a.fit !== 'original' || a.x !== 50 || a.y !== 50)) {
         recordStyle(entry, element, 'object-position', a.x + '% ' + a.y + '%');
       }
     }
@@ -725,6 +752,13 @@
     if (a.height > 0) recordStyle(entry, element, 'height', a.height + 'px');
     if (a.maxWidth > 0) recordStyle(entry, element, 'max-width', a.maxWidth + 'px');
     if (a.maxHeight > 0) recordStyle(entry, element, 'max-height', a.maxHeight + 'px');
+    if (a.rotation || a.mirror !== 'none') {
+      recordStyle(entry, element, 'transform-origin', 'center center');
+      if (element.namespaceURI === 'http://www.w3.org/2000/svg')
+        recordStyle(entry, element, 'transform-box', 'fill-box');
+      if (a.rotation) recordStyle(entry, element, 'rotate', a.rotation + 'deg');
+      if (a.mirror !== 'none') recordStyle(entry, element, 'scale', mirrorScale(a.mirror));
+    }
   }
 
   function applyBackgroundAppearance(entry, element, a) {
@@ -732,7 +766,7 @@
       recordStyle(entry, element, 'background-size', backgroundSize(a.fit));
       recordStyle(entry, element, 'background-repeat', 'no-repeat');
     }
-    if (a.fit !== 'original' || a.x !== 50 || a.y !== 50) {
+    if (a.fit !== 'fill') {
       recordStyle(entry, element, 'background-position', a.x + '% ' + a.y + '%');
     }
     if (a.blend !== 'normal') recordStyle(entry, element, 'background-blend-mode', a.blend);
@@ -775,7 +809,9 @@
 
   function applyImageRule(el, match) {
     const { rule, source } = match;
-    const entry = { kind: 'attribute', element: el, ruleId: rule.id, source, records: [] };
+    const site = getComputedStyle(el);
+    const entry = { kind: 'attribute', element: el, ruleId: rule.id, source, records: [],
+      siteStyle: { objectFit: site.objectFit, objectPosition: site.objectPosition } };
     if (el.localName === 'image' && el.namespaceURI === 'http://www.w3.org/2000/svg') {
       recordAttribute(entry, el, 'href', rule.resolvedReplacement);
       if (el.hasAttributeNS(XLINK_NS, 'href')) {
@@ -855,7 +891,8 @@
     if (!el.isConnected || isImageNode(el) || el === widgetHost) return;
     const previous = overrides.get(el);
     if (previous) restoreOverride(previous);
-    const background = getComputedStyle(el).backgroundImage;
+    const site = getComputedStyle(el);
+    const background = site.backgroundImage;
     const rule = findBackgroundRule(el, background);
     if (!rule) return;
     const newBackground = replaceBackground(background, rule);
@@ -866,6 +903,8 @@
       originalInline: style.getPropertyValue('background-image'),
       originalPriority: style.getPropertyPriority('background-image'),
       originalComputed: background,
+      siteStyle: { backgroundSize: site.backgroundSize, backgroundRepeat: site.backgroundRepeat,
+        backgroundPosition: site.backgroundPosition },
       applied: newBackground
     };
     style.setProperty('background-image', newBackground, 'important');
@@ -902,7 +941,7 @@
             extra.push('background-size: ' + backgroundSize(a.fit) + ' !important');
             extra.push('background-repeat: no-repeat !important');
           }
-          if (a.fit !== 'original' || a.x !== 50 || a.y !== 50)
+          if (a.fit !== 'fill')
             extra.push('background-position: ' + a.x + '% ' + a.y + '% !important');
           if (a.blend !== 'normal') extra.push('background-blend-mode: ' + a.blend + ' !important');
         } else if (a.fit !== 'original') {
@@ -1039,7 +1078,9 @@
   // visible control is needed, so unrelated pages get no script-owned UI node.
   const widgetHost = document.createElement('div');
   widgetHost.id = 'image-swap-widget-host';
-  widgetHost.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+  // The host spans the viewport. A site's generic div background can override
+  // :host styling and cover the page even when no image rules are active.
+  widgetHost.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:transparent!important;';
   const ui = widgetHost.attachShadow({ mode: 'closed' });
   ui.innerHTML = `
     <style>
@@ -1156,27 +1197,31 @@
         border-radius: 6px; color: var(--text); padding: 9px; font-size: 12px; }
       .upload-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 8px; }
       .upload-controls input[type="file"] { width: min(100%, 310px); font-size: 12px; }
-      .preview { display: block; max-height: 110px; max-width: 240px; margin-top: 8px;
-        background: repeating-conic-gradient(#eee 0% 25%, #bbb 0% 50%) 50% / 16px 16px;
-        border: 1px solid var(--border); object-fit: contain; }
+      .upload-box { margin-top: 10px; padding: 11px; border: 1px solid var(--border);
+        border-radius: 9px; background: var(--surface-raised); }
+      #localImageField { margin-bottom: 14px; }
+      .upload-box .upload-controls { margin-top: 0; }
+      .upload-box small { margin-top: 6px; }
       .library-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
         gap: 6px; border-top: 1px solid var(--border-subtle); padding: 8px 0; }
       .library-entry-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
       .field small { display: block; color: var(--muted); margin-top: 4px; }
       .field > label { display: inline-block; vertical-align: middle; }
-      .help-heading { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
-      .help-heading > h3 { margin: 0; }
-      .help-tip { display: inline-flex; align-items: center; flex: none; vertical-align: middle; margin-left: 3px; }
-      .help-trigger { position: relative; display: inline-grid; place-items: center; width: 15px; height: 15px;
+      .help-heading, .help-label-row { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+      .help-heading > h3, .help-label-row > label { margin: 0; }
+      .help-label-row { margin-bottom: 4px; }
+      .help-tip { display: inline-flex; align-items: center; flex: none; }
+      .help-trigger { position: relative; display: inline-grid; place-items: center; width: 13px; height: 13px;
         padding: 0; border: 1px solid var(--border); border-radius: 50%;
         background: var(--surface-raised); color: var(--muted); cursor: help;
-        font: 700 9.5px/1 system-ui, sans-serif; }
-      .help-trigger::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; }
+        font: 700 8.5px/1 system-ui, sans-serif; }
+      .help-trigger::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; }
       .help-trigger:hover { color: var(--text); }
       .help-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
       .help-trigger[aria-expanded="true"] { border-color: var(--focus); }
       .help-popover { position: fixed; z-index: 20; pointer-events: auto; box-sizing: border-box;
-        max-width: min(300px, calc(100vw - 24px)); padding: 9px 11px; background: var(--surface-input);
+        max-width: min(300px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+        overflow: auto; padding: 9px 11px; background: var(--surface-input);
         color: var(--text); border: 1px solid var(--border); border-radius: 8px;
         box-shadow: 0 7px 24px var(--shadow-color); font-size: 12px; font-weight: 400; line-height: 1.5; }
       .reuse-settings { padding: 10px 12px; margin: 10px 0 15px; border: 1px solid var(--border-subtle);
@@ -1192,36 +1237,74 @@
       .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
       .field-grid > div { min-width: 0; }
       .field-grid > div > label { display: inline-block; vertical-align: middle; }
-      .weekday-options { display: flex; flex-wrap: wrap; gap: 7px 12px; }
-      .weekday-options label { display: inline-flex; align-items: center; gap: 3px; font-weight: 400; cursor: pointer; }
+      .date-entry { position: relative; }
+      .date-entry > input[type="text"] { padding-right: 39px; }
+      .date-picker-button { position: absolute; top: 1px; right: 1px;
+        width: 34px; height: calc(100% - 2px); padding: 0; border: 0;
+        border-radius: 0 5px 5px 0; background: transparent; color: var(--muted);
+        display: grid; place-items: center; }
+      .date-picker-button:hover { background: var(--control); color: var(--text); }
+      .date-picker-button svg { display: block; width: 16px; height: 16px;
+        fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+      .date-entry > input[type="date"] { position: absolute; top: 1px; right: 1px;
+        width: 34px; height: calc(100% - 2px); padding: 0; border: 0;
+        opacity: 0; pointer-events: none; }
+      .date-entry.native-date-fallback { display: grid; gap: 5px; }
+      .date-entry.native-date-fallback > input[type="text"] { padding-right: 9px; }
+      .date-entry.native-date-fallback > input[type="date"] { position: static;
+        width: 100%; height: auto; padding: 9px; border: 1px solid var(--border);
+        opacity: 1; pointer-events: auto; color: var(--text); }
+      .field-grid > div.inactive { opacity: .5; }
+      .field-grid > div.inactive input, .field-grid > div.inactive select { cursor: not-allowed; }
+      .weekday-options { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 7px 4px; }
+      .weekday-options label { display: inline-flex; align-items: center;
+        gap: 3px; font-weight: 400; cursor: pointer; }
+      .weekday-break { display: none; }
       #editor { border-top: 1px solid var(--border-subtle); margin-top: 14px; padding-top: 13px; }
       #feedback { color: var(--error); margin-top: 9px; white-space: pre-wrap; }
-      .theme-control { display: inline-flex; gap: 7px; align-items: center; }
-      .theme-control label { color: var(--muted); }
-      .theme-control select { font: inherit; color: var(--text); background: var(--surface-input);
-        border: 1px solid var(--border); padding: 5px 8px; border-radius: 6px; }
+      .panel-actions { display: flex; align-items: center; gap: 6px; }
+      #themeToggle { position: relative; display: grid; place-items: center; width: 30px; height: 30px;
+        padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text); }
+      #themeToggle svg { display: block; width: 22px; height: 22px; overflow: visible; }
+      #themeToggle .bulb-body { fill: currentColor; }
+      #themeToggle .bulb-rays, #themeToggle .bulb-slash { fill: none; stroke: currentColor;
+        stroke-width: 2.1; stroke-linecap: round; }
+      #themeToggle[data-resolved="light"] .bulb-slash,
+      #themeToggle[data-resolved="dark"] .bulb-rays { display: none; }
+      #themeToggle[data-mode="auto"]::after { content: 'A'; position: absolute; right: 1px;
+        bottom: 1px; font-size: 8px; font-weight: 800; line-height: 1; color: var(--text); }
+      #close { display: grid; place-items: center; width: 30px; height: 30px;
+        padding: 0; font-size: 26px; line-height: 1; }
+      #themeToggle:hover { background: var(--surface-raised); }
       .live-preview-area { margin: 10px 0 14px; padding: 11px; border: 1px solid var(--border);
         background: var(--surface-raised); border-radius: 9px; }
       .live-preview-heading { display: flex; gap: 10px; justify-content: space-between;
         align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
       #previewFrame { display: grid; place-items: center; position: relative; overflow: hidden;
-        width: min(100%, 310px); height: 170px; margin: 8px auto; border: 1px solid var(--border);
+        width: min(100%, 310px); max-width: 100%; height: 170px; margin: 8px auto; border: 1px solid var(--border);
         border-radius: 6px; background-color: var(--preview-base);
         background-image: linear-gradient(45deg, #ffffff66 25%, transparent 25%),
           linear-gradient(-45deg, #ffffff66 25%, transparent 25%),
           linear-gradient(45deg, transparent 75%, #ffffff66 75%),
           linear-gradient(-45deg, transparent 75%, #ffffff66 75%);
         background-size: 24px 24px; background-position: 0 0, 0 12px, 12px -12px, -12px 0; }
+      #previewStage { position: absolute; top: 0; left: 0; transform-origin: top left;
+        background-repeat: no-repeat; }
       #previewImage { display: block; width: 100%; height: 100%; max-width: none; max-height: none;
         object-fit: contain; object-position: center; }
       #previewPlaceholder { padding: 12px; font-size: 12px; text-align: center; color: #203147;
         background: #ffffffa6; border-radius: 6px; max-width: 85%; }
-      #previewView { margin-top: 4px; }
+      #previewDimensions { text-align: center; margin: 2px 0 8px; }
+      .preview-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center; gap: 6px; margin: 8px 0; }
+      .preview-actions .toggle { margin: 0; }
+      .preview-actions #previewView { padding: 4px 6px; font-size: 11px; }
       #previewDock { position: fixed; pointer-events: auto; top: 15px; right: 15px;
         background: #18212d; color: #ecf1f8; border: 1px solid #526075;
-        border-radius: 9px; padding: 9px; box-shadow: 0 4px 20px #0008; }
+        border-radius: 9px; padding: 9px; box-shadow: 0 4px 20px #0008;
+        display: flex; align-items: center; gap: 10px; }
       #previewDock button { font: 13px system-ui,sans-serif; }
-      #previewDock .hint { font: 11px system-ui,sans-serif; color: #b4c1d1; margin-top: 5px; }
+      #previewDock .hint { font: 11px/1.4 system-ui,sans-serif; color: #b4c1d1; }
       #pickOutline { position: fixed; pointer-events: none; border: 3px solid #72b9ff;
         background: #5aa7ff27; z-index: 2; border-radius: 3px; }
       #pickHint { position: fixed; top: 13px; left: 50%; transform: translateX(-50%);
@@ -1229,20 +1312,21 @@
         padding: 10px 15px; max-width: calc(100vw - 20px); text-align: center;
         pointer-events: none; box-shadow: 0 5px 22px #000a; font-size: 13px; }
       @media (max-width: 520px) { .inner { padding: 12px; } }
-      @media (max-width: 400px) { .entry { padding: 8px; } .entry-body { padding-left: 0; } }
+      @media (max-width: 400px) { .entry { padding: 8px; } .entry-body { padding-left: 0; }
+        .date-grid { grid-template-columns: 1fr; }
+        .weekday-break { display: block; flex-basis: 100%; height: 0; } }
     </style>
-    <div id="launcher" data-corner="bottom-right"><button type="button" id="grip" title="Drag to move; snaps to a corner" aria-label="Drag No-BS Image Swapper floating button">⠿</button><button type="button" id="open" title="No-BS Image Swapper: manage image replacements" aria-label="NBSIS: open No-BS Image Swapper">NBSIS</button><button type="button" id="quickToggle" title="Disable image replacements" aria-label="Disable image replacements" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5v9"/><path d="M7.4 5.8a8 8 0 1 0 9.2 0"/></svg></button></div>
+    <div id="launcher" data-corner="bottom-right"><button type="button" id="grip" title="Drag to move; snaps to a corner" aria-label="Drag No-BS Image Swapper floating button">⠿</button><button type="button" id="open" title="No-BS Image Swapper: manage image replacements" aria-label="NBSIS: open No-BS Image Swapper">NBSIS</button><button type="button" id="quickToggle" title="Disable image replacements" aria-label="Image replacements" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5v9"/><path d="M7.4 5.8a8 8 0 1 0 9.2 0"/></svg></button></div>
     <div id="veil" hidden>
       <section id="panel" role="dialog" aria-modal="true" aria-label="No-BS Image Swapper settings" tabindex="-1">
         <div class="inner">
-          <div class="heading"><h2>No-BS Image Swapper</h2><button type="button" class="icon" id="close" aria-label="Close">×</button></div>
+          <div class="heading"><h2>No-BS Image Swapper</h2><div class="panel-actions">
+            <button type="button" id="themeToggle" aria-label="Theme" title="Toggle theme; Shift+click for automatic"><svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path class="bulb-body" d="M16 7a8 8 0 0 0-4.8 14.4c.7.5 1.2 1.3 1.3 2.1h7c.1-.8.6-1.6 1.3-2.1A8 8 0 0 0 16 7Z"/><rect class="bulb-body" x="12.5" y="25" width="7" height="2" rx="1"/><rect class="bulb-body" x="13.5" y="28" width="5" height="2" rx="1"/><path class="bulb-rays" d="M16 2v2M6 6l1.5 1.5M2 16h2M26 6l-1.5 1.5M30 16h-2"/><path class="bulb-slash" d="M5 27 27 5"/></svg></button>
+            <button type="button" class="icon" id="close" aria-label="Close">×</button></div></div>
           <p class="muted">Persistent image replacements for this browser.</p>
           <div class="controls">
-            <label class="toggle"><input id="enabled" type="checkbox"> Replacements enabled</label>
+            <label class="toggle"><input id="enabled" type="checkbox"> NBSIS enabled</label>
             <label class="toggle"><input id="showButton" type="checkbox"> Show floating button</label>
-            <div class="theme-control"><label for="themeMode">Theme</label><select id="themeMode">
-              <option value="auto">Automatic</option><option value="light">Light</option><option value="dark">Dark</option>
-            </select></div>
           </div>
           <div class="actions">
             <button type="button" class="button primary" id="add">+ Add manual rule</button>
@@ -1284,27 +1368,36 @@
             <div class="field" id="localImageField" hidden>
               <label for="assetChoice">Stored image to use</label>
               <select id="assetChoice"><option value="">Choose an uploaded image…</option></select>
-              <div class="upload-controls"><label for="uploadInput">Upload a new image</label>
-                <input id="uploadInput" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.avif,.bmp,.ico,.svg,image/*"></div>
-              <small>PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, or SVG · Maximum ${bytesText(MAX_IMAGE_BYTES)} per image, ${bytesText(MAX_TOTAL_BYTES)} total; browser storage may allow less. Image bytes remain in browser userscript storage.</small>
-              <img id="assetPreview" class="preview" alt="Selected stored image preview" hidden>
-              <div id="uploadStatus" class="tiny" aria-live="polite"></div>
+              <div class="upload-box"><div class="upload-controls"><label for="uploadInput">Upload a new image</label>
+                  <input id="uploadInput" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.avif,.bmp,.ico,.svg,image/*"></div>
+                <small>PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, or SVG · Maximum ${bytesText(MAX_IMAGE_BYTES)} per image, ${bytesText(MAX_TOTAL_BYTES)} total; browser storage may allow less. Image bytes remain in browser userscript storage.</small>
+                <div id="uploadStatus" class="tiny" aria-live="polite"></div></div>
             </div>
-            <section id="appearanceOptions" aria-labelledby="appearanceHeading">
-              <h3 id="appearanceHeading" style="margin-top:14px">Appearance</h3>
-              <section class="live-preview-area" aria-label="Replacement appearance preview">
+            <section class="live-preview-area" aria-label="Replacement appearance preview">
                 <div class="live-preview-heading"><strong>Live preview</strong><span id="previewStatus" class="tiny" aria-live="polite">Select a replacement image</span></div>
-                <div id="previewFrame"><img id="previewImage" alt="Live replacement preview" hidden>
+                <div id="previewFrame"><div id="previewStage"><img id="previewImage" alt="Live replacement preview" hidden></div>
                   <span id="previewPlaceholder">Add a replacement image to see it here.</span></div>
-                <label class="toggle"><input type="checkbox" id="previewOnPage" checked> Preview changes on this page</label>
-                <div class="buttons"><button type="button" class="button small" id="previewView">View page preview</button></div>
-                <small class="tiny">The thumbnail shows the entire replacement image. The page preview applies fit and sizing to the real page without saving; Cancel restores the saved rule.</small>
-              </section>
+                <div id="previewDimensions" class="tiny" aria-live="polite"></div>
+                <div class="preview-actions"><label class="toggle" for="previewOnPage"><input type="checkbox" id="previewOnPage" checked> Page preview</label>
+                  <button type="button" class="button small" id="previewView">Hide NBSIS interface</button></div>
+                <p id="pagePreviewHelp" hidden>Shows changes on this page as you edit. You will not see changes here when the rule targets a different page.</p>
+                <small class="tiny">This scaled sample shows fit, alignment, size, rotation, mirroring, blend, and opacity where they apply. Check the page itself for exact sizing and website styling. <em>Cancel</em> restores the saved rule.</small>
+            </section>
+            <details id="advancedOptions" style="margin:12px 0 15px">
+              <summary style="cursor:pointer;font-weight:650">Advanced options</summary>
+              <section id="appearanceOptions" aria-labelledby="appearanceHeading"><h3 id="appearanceHeading">Appearance</h3>
+              <div class="field"><label for="fit">How the replacement fits</label>
+                <select id="fit">
+                  <option value="original">Keep website styling</option>
+                  <option value="contain">Contain (fit whole image)</option>
+                  <option value="cover">Cover (fill area, crop overflow)</option>
+                  <option value="fill">Stretch (fill area, distort if needed)</option>
+                  <option value="scale-down">Scale down (never enlarge)</option>
+                  <option value="none">Natural size (no scaling)</option>
+                </select>
+                <small>Uses object-fit for images and background-size for CSS backgrounds. Replacement backgrounds start centered. <em>Contain</em> and <em>Cover</em> need a defined image box to crop or letterbox. Some target and fit combinations dim controls that cannot apply; their settings remain saved.</small></div>
               <div class="field field-grid">
-                <div><label for="positionX">Horizontal alignment (%)</label><input type="number" id="positionX" min="0" max="100" step="1" value="50"></div>
-                <div><label for="positionY">Vertical alignment (%)</label><input type="number" id="positionY" min="0" max="100" step="1" value="50"></div>
-              </div>
-              <div class="field"><label for="blend">Blend mode</label>
+                <div><label for="blend">Blend mode</label>
                 <select id="blend"><option value="normal">Normal</option><option value="multiply">Multiply</option>
                   <option value="screen">Screen</option><option value="overlay">Overlay</option>
                   <option value="darken">Darken</option><option value="lighten">Lighten</option>
@@ -1313,67 +1406,64 @@
                   <option value="difference">Difference</option><option value="exclusion">Exclusion</option>
                   <option value="hue">Hue</option><option value="saturation">Saturation</option>
                   <option value="color">Color</option><option value="luminosity">Luminosity</option>
-                </select><small>Images blend against surrounding content; CSS backgrounds blend with background layers/color, not surrounding text.</small></div>
-              <div class="field field-grid">
+                </select><small>Images blend against surrounding content; CSS backgrounds blend with background layers or color.</small></div>
                 <div><label for="opacity">Image opacity (%)</label><input type="number" id="opacity" min="0" max="100" step="1" value="100"></div>
-                <div></div>
+              </div>
+              <div class="field field-grid">
+                <div><label for="positionX">Horizontal alignment (%)</label><input type="number" id="positionX" min="0" max="100" step="1" value="50"></div>
+                <div><label for="positionY">Vertical alignment (%)</label><input type="number" id="positionY" min="0" max="100" step="1" value="50"></div>
+              </div>
+              <div class="field field-grid">
                 <div><label for="targetWidth">Display width (px)</label><input type="number" id="targetWidth" min="0" max="10000" step="1" value="0"></div>
                 <div><label for="targetHeight">Display height (px)</label><input type="number" id="targetHeight" min="0" max="10000" step="1" value="0"></div>
                 <div><label for="maxWidth">Maximum width (px)</label><input type="number" id="maxWidth" min="0" max="10000" step="1" value="0"></div>
                 <div><label for="maxHeight">Maximum height (px)</label><input type="number" id="maxHeight" min="0" max="10000" step="1" value="0"></div>
               </div>
-              <p class="tiny">Zero means keep the website’s dimensions (or no maximum). Display width/height establish a box for Contain, Cover, and Stretch when the page doesn’t provide one. These size and opacity settings apply to image elements, not CSS backgrounds; fading a background’s parent would fade its text too.</p>
-            </section>
-            <details id="advancedOptions" style="margin:12px 0 15px">
-              <summary style="cursor:pointer;font-weight:650">Advanced options — fit, reuse, and conditions</summary>
-              <div class="field"><label for="fit">How the replacement fits</label>
-                <select id="fit">
-                  <option value="original">Keep website styling</option>
-                  <option value="contain">Contain — fit whole image</option>
-                  <option value="cover">Cover — fill area, crop overflow</option>
-                  <option value="fill">Stretch — fill area, distort if needed</option>
-                  <option value="scale-down">Scale down — never enlarge</option>
-                  <option value="none">Natural size — no scaling</option>
-                </select>
-                <small>Uses object-fit for images and background-size for CSS backgrounds. Contain/cover need a defined image box to crop or letterbox.</small></div>
-              <section id="reuseSettings" class="reuse-settings" hidden>
-                <h3>Reuse settings</h3>
-                <div class="field"><label for="copySource">Copy from rule</label>
-                  <select id="copySource"><option value="">Select an existing rule…</option></select></div>
-                <div class="field"><label for="copyParts">What to copy</label>
-                  <select id="copyParts"><option value="both">Appearance and conditions</option>
-                    <option value="appearance">Appearance only</option>
-                    <option value="schedule">Conditions only</option></select></div>
-                <button type="button" class="button" id="copySettings">Copy settings</button>
-                <span id="copyStatus" class="tiny" role="status" aria-live="polite"></span>
-                <p class="tiny">Copies only the selected settings. The rule’s name, matching criteria, and replacement image stay unchanged until you edit them.</p>
+              <div class="field field-grid">
+                <div><label for="rotation">Rotation (degrees)</label><input type="number" id="rotation" min="-360" max="360" step="1" value="0"></div>
+                <div><label for="mirror">Mirror</label><select id="mirror"><option value="none">None</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="both">Both axes</option></select></div>
+              </div>
+              <p class="tiny">Zero size keeps the website’s dimensions or removes a maximum. <em>Display width</em> and <em>Display height</em> establish a box when the page does not provide one. Size, opacity, rotation, and mirroring apply to image elements; CSS cannot transform a background image without also transforming its page content. Inapplicable controls are dimmed, and their saved values remain available when the target or fit changes.</p>
               </section>
               <h3>Conditions</h3>
               <div class="field"><label for="conditionMode">When should this rule apply?</label>
                 <select id="conditionMode"><option value="always">Always</option><option value="scheduled">On a schedule</option></select></div>
               <div id="scheduleFields" hidden>
+                <div class="field"><label for="scheduleTimezone">Time zone</label>
+                  <select id="scheduleTimezone"><option value="local">Browser’s local time</option><option value="utc">UTC</option></select></div>
                 <div class="field field-grid">
                   <div><label for="scheduleStart">From (inclusive)</label><input type="time" id="scheduleStart" value="09:00"></div>
                   <div><label for="scheduleEnd">Until (exclusive)</label><input type="time" id="scheduleEnd" value="17:00"></div>
                 </div>
-                <div class="field"><label>Days of the week</label><div id="weekdayOptions" class="weekday-options">
+                <div class="field"><label id="weekdayHeading">Days of the week</label><div id="weekdayOptions" class="weekday-options" role="group" aria-labelledby="weekdayHeading">
                   <label><input type="checkbox" data-weekday="1" checked>Mon</label>
                   <label><input type="checkbox" data-weekday="2" checked>Tue</label>
                   <label><input type="checkbox" data-weekday="3" checked>Wed</label>
                   <label><input type="checkbox" data-weekday="4" checked>Thu</label>
+                  <span class="weekday-break" aria-hidden="true"></span>
                   <label><input type="checkbox" data-weekday="5" checked>Fri</label>
                   <label><input type="checkbox" data-weekday="6" checked>Sat</label>
                   <label><input type="checkbox" data-weekday="0" checked>Sun</label>
                 </div></div>
-                <div class="field"><label for="scheduleTimezone">Time zone</label>
-                  <select id="scheduleTimezone"><option value="local">Browser’s local time</option><option value="utc">UTC</option></select></div>
-                <div class="field field-grid">
-                  <div><label for="scheduleFrom">First date (optional)</label><input type="date" id="scheduleFrom"></div>
-                  <div><label for="scheduleUntil">Last date (optional)</label><input type="date" id="scheduleUntil"></div>
+                <div class="field field-grid date-grid">
+                  <div><label for="scheduleFrom">First date</label><div class="date-entry"><input type="text" id="scheduleFrom" inputmode="numeric" maxlength="10" placeholder="dd/mm/yyyy" autocomplete="off"><button type="button" class="date-picker-button" id="scheduleFromCalendar" aria-label="Choose first date from calendar" title="Choose first date from calendar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg></button><input type="date" id="scheduleFromPicker" tabindex="-1" aria-hidden="true"></div></div>
+                  <div><label for="scheduleUntil">Last date</label><div class="date-entry"><input type="text" id="scheduleUntil" inputmode="numeric" maxlength="10" placeholder="dd/mm/yyyy" autocomplete="off"><button type="button" class="date-picker-button" id="scheduleUntilCalendar" aria-label="Choose last date from calendar" title="Choose last date from calendar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg></button><input type="date" id="scheduleUntilPicker" tabindex="-1" aria-hidden="true"></div></div>
                 </div>
-                <p class="tiny">Choose matching weekdays and hours; equal times mean all day. Overnight windows continue into the next day, but count toward the selected starting weekday/date. Date limits are inclusive. The page updates when the clock changes, without a reload.</p>
+                <p class="tiny">Choose matching weekdays and hours; equal times mean all day. Overnight windows continue into the next day, but count toward the selected starting weekday/date. Either date may be left blank; date limits are inclusive. The page updates when the clock changes, without a reload.</p>
               </div>
             </details>
+            <section id="reuseSettings" class="reuse-settings" hidden>
+              <h3>Reuse settings</h3>
+              <div class="field"><label for="copySource">Copy from rule</label>
+                <select id="copySource"><option value="">Select an existing rule…</option></select></div>
+              <div class="field"><label for="copyParts">What to copy</label>
+                <select id="copyParts"><option value="both">Appearance and conditions</option>
+                  <option value="appearance">Appearance only</option>
+                  <option value="schedule">Conditions only</option></select></div>
+              <button type="button" class="button" id="copySettings">Copy settings</button>
+              <span id="copyStatus" class="tiny" role="status" aria-live="polite"></span>
+              <p class="tiny">Copies only the selected settings. The rule’s name, matching criteria, and replacement image stay unchanged until you edit them.</p>
+            </section>
             <div id="conflictNotice" role="status" aria-live="polite" hidden></div>
             <div id="feedback" role="alert" hidden></div>
             <div class="buttons"><button type="submit" class="button primary">Save rule</button>
@@ -1383,9 +1473,9 @@
       </section>
     </div>
     <div id="previewDock" hidden><button type="button" class="button primary" id="previewReturn">Return to editor</button>
-      <div class="hint">Unsaved image preview · press Esc to return</div></div>
+      <div class="hint">Unsaved rule preview.<br>Press <em>Esc</em> to return.</div></div>
     <div id="pickOutline" hidden></div>
-    <div id="pickHint" hidden>Click an image or CSS background to create a rule. Press Esc to cancel.</div>
+    <div id="pickHint" hidden>Click an image or CSS background to create a rule. Press <em>Esc</em> to cancel.</div>
   `;
   const $ = id => ui.getElementById(id);
   let activeHelp = null;
@@ -1411,12 +1501,13 @@
     popover.className = 'help-popover';
     popover.id = 'help-' + ui.querySelectorAll('.help-popover').length;
     popover.hidden = true;
-    popover.textContent = text;
+    if (text instanceof Node) popover.append(...[...text.childNodes].map(node => node.cloneNode(true)));
+    else popover.textContent = text;
     button.setAttribute('aria-controls', popover.id);
     help.append(button);
-    if (after.matches('h3, .live-preview-heading strong')) {
-      const wrapper = document.createElement(after.matches('h3') ? 'div' : 'span');
-      wrapper.className = 'help-heading';
+    if (after.matches('label, h3, .live-preview-heading strong, summary strong')) {
+      const wrapper = document.createElement(after.matches('h3, label') ? 'div' : 'span');
+      wrapper.className = after.matches('label') ? 'help-label-row' : 'help-heading';
       after.replaceWith(wrapper);
       wrapper.append(after, help);
     } else after.after(help);
@@ -1446,12 +1537,13 @@
       const label = field.querySelector('label[for="' + id + '"]');
       const description = field.querySelector('small');
       if (!label || !description) continue;
-      addContextualHelp(label, description.textContent, label.textContent);
+      addContextualHelp(label, description, label.textContent);
       description.remove();
     }
     // Advanced explanations stay available without taking up permanent space.
     for (const [note, trigger, label] of [
       ['.live-preview-area > small.tiny', '.live-preview-heading strong', 'Live preview'],
+      ['#pagePreviewHelp', '.preview-actions > label', 'Page preview'],
       ['#reuseSettings > p.tiny', '#reuseSettings > h3', 'Copying settings'],
       ['#appearanceOptions > p.tiny', 'label[for="targetWidth"]', 'Image sizing'],
       ['#scheduleFields > p.tiny', 'label[for="conditionMode"]', 'Schedule behavior'],
@@ -1461,7 +1553,7 @@
       const description = ui.querySelector(note);
       const anchor = ui.querySelector(trigger);
       if (!description || !anchor) continue;
-      addContextualHelp(anchor, description.textContent, label);
+      addContextualHelp(anchor, description, label);
       description.remove();
     }
   }
@@ -1475,7 +1567,17 @@
   function applyTheme() {
     const theme = settings.theme === 'auto' ? (colorSchemeQuery.matches ? 'dark' : 'light') : settings.theme;
     ui.host.dataset.theme = theme;
-    $('themeMode').value = settings.theme;
+    const toggle = $('themeToggle');
+    toggle.dataset.resolved = theme;
+    toggle.dataset.mode = settings.theme;
+    const name = value => value[0].toUpperCase() + value.slice(1);
+    const state = settings.theme === 'auto' ? 'Automatic (' + name(theme) + ')' : name(theme);
+    const next = theme === 'light' ? 'Dark' : 'Light';
+    const shiftAction = settings.theme === 'auto'
+      ? 'Shift+click to disable Automatic.' : 'Shift+click for Automatic.';
+    const hint = 'Theme: ' + state + '. Click for ' + next + '. ' + shiftAction;
+    toggle.setAttribute('aria-label', hint);
+    toggle.title = hint;
   }
 
   // Static, decorative SVG markup (no user data) for the saved-rule action buttons.
@@ -1502,7 +1604,7 @@
     $('launcher').dataset.corner = settings.buttonCorner;
     $('quickToggle').classList.toggle('off', !settings.enabled);
     $('quickToggle').setAttribute('aria-pressed', String(settings.enabled));
-    $('quickToggle').setAttribute('aria-label', settings.enabled ? 'Disable image replacements' : 'Enable image replacements');
+    $('quickToggle').setAttribute('aria-label', 'Image replacements');
     $('quickToggle').title = settings.enabled ? 'Disable image replacements' : 'Enable image replacements';
     syncWidgetMount();
     if ($('veil').hidden) return;
@@ -1605,20 +1707,6 @@
       select.add(new Option(asset.name + ' (' + bytesText(asset.bytes) + ')', asset.id));
     }
     select.value = settings.assets.some(a => a.id === preferred) ? preferred : '';
-    showAssetPreview();
-  }
-
-  function showAssetPreview() {
-    const id = $('assetChoice').value;
-    const preview = $('assetPreview');
-    preview.hidden = true;
-    preview.removeAttribute('src');
-    if (!id || !settings.assets.some(a => a.id === id)) return;
-    const stored = GM_getValue(ASSET_PREFIX + id, null);
-    if (typeof stored === 'string' && stored.startsWith('data:image/')) {
-      preview.src = stored;
-      preview.hidden = false;
-    }
   }
 
   function renderAssets() {
@@ -1697,7 +1785,7 @@
     returnToEditor(false);
     $('veil').hidden = false;
     render();
-    $('close').focus();
+    $('themeToggle').focus();
   }
 
   function closePanel(restoreFocus = true) {
@@ -1722,10 +1810,8 @@
     for (const id of ['ruleName', 'scope', 'pattern', 'selector', 'replacement']) $(id).value = '';
     $('uploadInput').value = '';
     $('assetLibraryUpload').value = '';
-    for (const id of ['assetPreview', 'previewImage']) {
-      $(id).removeAttribute('src');
-      $(id).hidden = true;
-    }
+    $('previewImage').removeAttribute('src');
+    $('previewImage').hidden = true;
     syncWidgetMount();
   }
 
@@ -1776,6 +1862,9 @@
     $('targetHeight').value = a.height;
     $('maxWidth').value = a.maxWidth;
     $('maxHeight').value = a.maxHeight;
+    $('rotation').value = a.rotation;
+    $('mirror').value = a.mirror;
+    setAppearanceControlState();
   }
 
   function loadScheduleFields(value) {
@@ -1784,8 +1873,10 @@
     $('scheduleStart').value = c.start;
     $('scheduleEnd').value = c.end;
     $('scheduleTimezone').value = c.timezone;
-    $('scheduleFrom').value = c.from;
-    $('scheduleUntil').value = c.until;
+    $('scheduleFrom').value = formatDisplayDate(c.from);
+    $('scheduleUntil').value = formatDisplayDate(c.until);
+    $('scheduleFromPicker').value = c.from;
+    $('scheduleUntilPicker').value = c.until;
     ui.querySelectorAll('[data-weekday]').forEach(el => {
       el.checked = c.days.includes(Number(el.dataset.weekday));
     });
@@ -1811,9 +1902,13 @@
     const parts = $('copyParts').value;
     if (parts === 'appearance' || parts === 'both') loadAppearanceFields(source.appearance);
     if (parts === 'schedule' || parts === 'both') loadScheduleFields(source.schedule);
-    $('copyStatus').textContent = 'Copied ' +
+    const message = 'Copied ' +
       (parts === 'both' ? 'appearance and conditions' : parts === 'schedule' ? 'conditions' : 'appearance') +
-      ' from “' + ruleLabel(source) + '”. Save to keep the changes.';
+      ' from “' + ruleLabel(source) + '”. ';
+    const command = document.createElement('em');
+    command.textContent = 'Save rule';
+    $('copyStatus').replaceChildren(document.createTextNode(message), command,
+      document.createTextNode(' to keep the changes.'));
     updateDraftPreview();
   }
 
@@ -1824,6 +1919,20 @@
     closeHelp();
     editingId = rule?.id ?? null;
     const draft = rule || suggested || {};
+    const matchedKinds = new Set([...overrides.values()]
+      .filter(entry => entry.ruleId === (rule?.id || suggested?.duplicateOf))
+      .map(entry => entry.kind === 'background' ? 'background' : 'image'));
+    editingTargetKind = suggested?.targetKind ||
+      (matchedKinds.size === 1 ? [...matchedKinds][0] : null);
+    editingTargetElement = suggested?.targetElement || [...overrides.keys()]
+      .find(element => overrides.get(element).ruleId === (rule?.id || suggested?.duplicateOf)) || null;
+    if (editingTargetElement?.isConnected) {
+      const originalStyle = overrides.get(editingTargetElement)?.siteStyle;
+      const style = originalStyle || getComputedStyle(editingTargetElement);
+      editingTargetStyle = { objectFit: style.objectFit, objectPosition: style.objectPosition,
+        backgroundSize: style.backgroundSize, backgroundRepeat: style.backgroundRepeat,
+        backgroundPosition: style.backgroundPosition };
+    } else editingTargetStyle = null;
     $('ruleName').value = typeof draft.name === 'string' ? draft.name : '';
     $('scope').value = draft.scope || location.hostname;
     $('mode').value = draft.mode || 'url';
@@ -1836,7 +1945,9 @@
     const c = normalizeSchedule(draft.schedule);
     loadAppearanceFields(a);
     loadScheduleFields(c);
-    $('advancedOptions').open = c.enabled || a.fit !== 'original';
+    const appearanceDefaults = normalizeAppearance();
+    $('advancedOptions').open = c.enabled ||
+      Object.keys(a).some(key => a[key] !== appearanceDefaults[key]);
     $('editorHeading').textContent = editingId ? 'Edit rule' :
       suggested?.duplicateOf ? 'Duplicate rule' : 'Add a rule';
     $('editor').hidden = false;
@@ -1875,6 +1986,9 @@
     clearTimeout(previewTimer);
     draftPreview = null;
     editingId = null;
+    editingTargetKind = null;
+    editingTargetElement = null;
+    editingTargetStyle = null;
     pagePreviewMode = false;
     $('previewDock').hidden = true;
     $('editor').hidden = true;
@@ -1902,8 +2016,24 @@
     $('scheduleFields').hidden = $('conditionMode').value !== 'scheduled';
   }
 
+  function setAppearanceControlState() {
+    const background = editingTargetKind === 'background';
+    for (const id of ['positionX', 'positionY', 'opacity', 'targetWidth', 'targetHeight',
+      'maxWidth', 'maxHeight', 'rotation', 'mirror']) {
+      const input = $(id);
+      const inactive = (id.startsWith('position') && $('fit').value === 'fill') ||
+        (background && !id.startsWith('position'));
+      input.disabled = inactive;
+      input.parentElement.classList.toggle('inactive', inactive);
+      input.parentElement.title = inactive
+        ? (background ? 'This setting applies to image elements, not CSS backgrounds.' :
+          'Alignment has no effect when the image stretches to fill the entire box.') : '';
+    }
+  }
+
   function editorAppearance() {
-    const values = ['positionX', 'positionY', 'opacity', 'targetWidth', 'targetHeight', 'maxWidth', 'maxHeight'];
+    const values = ['positionX', 'positionY', 'opacity', 'targetWidth', 'targetHeight',
+      'maxWidth', 'maxHeight', 'rotation'];
     for (const id of values) {
       const input = $(id);
       if (!input.value.trim() || !input.validity.valid || !Number.isFinite(Number(input.value))) {
@@ -1914,25 +2044,27 @@
       fit: $('fit').value, x: Number($('positionX').value), y: Number($('positionY').value),
       blend: $('blend').value, opacity: Number($('opacity').value),
       width: Number($('targetWidth').value), height: Number($('targetHeight').value),
-      maxWidth: Number($('maxWidth').value), maxHeight: Number($('maxHeight').value)
+      maxWidth: Number($('maxWidth').value), maxHeight: Number($('maxHeight').value),
+      rotation: Number($('rotation').value), mirror: $('mirror').value
     });
   }
 
   function editorSchedule() {
+    const from = parseDisplayDate($('scheduleFrom').value);
+    const until = parseDisplayDate($('scheduleUntil').value);
     const schedule = normalizeSchedule({
       enabled: $('conditionMode').value === 'scheduled',
       start: $('scheduleStart').value, end: $('scheduleEnd').value,
       timezone: $('scheduleTimezone').value,
       days: [...ui.querySelectorAll('[data-weekday]:checked')].map(el => Number(el.dataset.weekday)),
-      from: $('scheduleFrom').value, until: $('scheduleUntil').value
+      from, until
     });
     if (schedule.enabled) {
       if (!validClock($('scheduleStart').value) || !validClock($('scheduleEnd').value))
         throw new Error('Enter both schedule times.');
       if (!schedule.days.length) throw new Error('Choose at least one weekday.');
-      if (($('scheduleFrom').value && !validDate($('scheduleFrom').value)) ||
-          ($('scheduleUntil').value && !validDate($('scheduleUntil').value)))
-        throw new Error('Enter valid optional date limits.');
+      if (from === null || until === null)
+        throw new Error('Enter valid optional dates as dd/mm/yyyy.');
       if (schedule.from && schedule.until && schedule.from > schedule.until)
         throw new Error('The first date must not be later than the last date.');
     }
@@ -1951,17 +2083,52 @@
     try { return new URL(url).href; } catch { return null; }
   }
 
-  function sizePreviewFrame() {
+  function sampleAppearance(appearance) {
+    return editingTargetKind === 'background' ?
+      { ...appearance, width: 0, height: 0, maxWidth: 0, maxHeight: 0,
+        opacity: 100, rotation: 0, mirror: 'none' } : appearance;
+  }
+
+  function sizePreviewFrame(appearance = null) {
     const img = $('previewImage');
     const frame = $('previewFrame');
+    const stage = $('previewStage');
     if (img.hidden || !img.naturalWidth || !img.naturalHeight) {
       frame.style.width = 'min(100%, 310px)';
       frame.style.height = '170px';
+      if (img.hidden) stage.style.cssText = '';
+      $('previewDimensions').textContent = '';
       return;
     }
-    const scale = Math.min(310 / img.naturalWidth, 220 / img.naturalHeight);
-    frame.style.width = Math.max(60, Math.round(img.naturalWidth * scale)) + 'px';
-    frame.style.height = Math.max(50, Math.round(img.naturalHeight * scale)) + 'px';
+    let a = appearance;
+    if (!a) { try { a = editorAppearance(); } catch { a = normalizeAppearance(); } }
+    a = sampleAppearance(a);
+    const target = editingTargetElement?.isConnected ? editingTargetElement : null;
+    const rect = target?.getBoundingClientRect();
+    // offset dimensions omit rotation/mirroring; a transformed bounding rect
+    // would otherwise count the transform twice in this sample.
+    let width = target?.offsetWidth > 0 ? target.offsetWidth : rect?.width > 0 ? rect.width : 620;
+    let height = target?.offsetHeight > 0 ? target.offsetHeight : rect?.height > 0 ? rect.height : 340;
+    if (editingTargetKind !== 'background') {
+      if (a.width) width = a.width;
+      if (a.height) height = a.height;
+      if (a.maxWidth) width = Math.min(width, a.maxWidth);
+      if (a.maxHeight) height = Math.min(height, a.maxHeight);
+    }
+    width = Math.max(1, Math.min(width, 10000));
+    height = Math.max(1, Math.min(height, 10000));
+    const scale = Math.min(3, 310 / width, 220 / height);
+    stage.style.width = width + 'px';
+    stage.style.height = height + 'px';
+    stage.style.transform = 'scale(' + scale + ')';
+    frame.style.width = Math.max(1, Math.round(width * scale)) + 'px';
+    frame.style.height = Math.max(1, Math.round(height * scale)) + 'px';
+    $('previewDimensions').textContent = [
+      target ? 'Scaled sample of target box' : 'Illustrative sample box',
+      a.width ? 'Width ' + a.width + ' px' : '', a.height ? 'height ' + a.height + ' px' : '',
+      a.maxWidth ? 'maximum width ' + a.maxWidth + ' px' : '',
+      a.maxHeight ? 'maximum height ' + a.maxHeight + ' px' : ''
+    ].filter(Boolean).join(' · ');
   }
 
   function updateDraftPreview() {
@@ -1979,15 +2146,32 @@
     img.hidden = !canDraw;
     placeholder.hidden = canDraw;
     if (canDraw) {
+      const sample = sampleAppearance(appearance);
       // Only reset src when changed: URL reloads on every keystroke would flicker.
       if (img.getAttribute('src') !== resolved) img.src = resolved;
-      img.style.objectFit = 'contain';
-      img.style.objectPosition = 'center';
-      img.style.mixBlendMode = appearance.blend;
-      img.style.opacity = String(appearance.opacity / 100);
-      sizePreviewFrame();
+      const stage = $('previewStage');
+      const background = editingTargetKind === 'background';
+      stage.style.backgroundImage = background ? 'url(' + JSON.stringify(resolved) + ')' : '';
+      stage.style.backgroundSize = background ? (sample.fit === 'original' ?
+        editingTargetStyle?.backgroundSize || 'auto' : backgroundSize(sample.fit)) : '';
+      stage.style.backgroundPosition = background && sample.fit !== 'fill'
+        ? sample.x + '% ' + sample.y + '%' : '';
+      stage.style.backgroundRepeat = background && sample.fit === 'original'
+        ? editingTargetStyle?.backgroundRepeat || 'no-repeat' : 'no-repeat';
+      stage.style.backgroundBlendMode = background ? sample.blend : '';
+      img.style.visibility = background ? 'hidden' : '';
+      img.style.objectFit = sample.fit === 'original' ?
+        editingTargetStyle?.objectFit || 'none' : sample.fit;
+      img.style.objectPosition = sample.fit === 'original' && sample.x === 50 && sample.y === 50
+        ? editingTargetStyle?.objectPosition || '50% 50%' : sample.x + '% ' + sample.y + '%';
+      img.style.mixBlendMode = sample.blend;
+      img.style.opacity = String(sample.opacity / 100);
+      img.style.rotate = sample.rotation ? sample.rotation + 'deg' : '';
+      img.style.scale = sample.mirror !== 'none' ? mirrorScale(sample.mirror) : '';
+      sizePreviewFrame(sample);
     } else {
       img.removeAttribute('src');
+      $('previewStage').style.backgroundImage = '';
       sizePreviewFrame();
       placeholder.textContent = !replacement ? 'Add a replacement image to see it here.' :
         !appearance ? 'Enter valid appearance values to preview.' :
@@ -2016,12 +2200,19 @@
     }
     const previewAvailable = !!nextDraft && settings.enabled;
     $('previewStatus').textContent = !canDraw ? 'Awaiting valid image and settings' :
-      !settings.enabled ? 'Global replacements are off; thumbnail only' :
-      previewAvailable ? 'Thumbnail + page preview enabled' : 'Thumbnail preview';
+      !settings.enabled ? 'Global replacements are off; image preview only' :
+      previewAvailable ? 'Image + page preview enabled' : 'Image preview';
     $('previewView').disabled = !previewAvailable;
     const changed = JSON.stringify(draftPreview) !== JSON.stringify(nextDraft);
     draftPreview = nextDraft;
-    if (changed) { refreshRules(); requestFullScan(); }
+    if (changed) {
+      refreshRules(); requestFullScan();
+      // The draft can change the target's box. Measure again after its page
+      // override has been applied, rather than retaining the previous rule's box.
+      requestAnimationFrame(() => {
+        if (draftPreview === nextDraft && !$('editor').hidden) sizePreviewFrame(appearance);
+      });
+    }
     updateConflictNotice();
   }
 
@@ -2262,13 +2453,21 @@
 
   function openRuleForTarget(el) {
     const isImg = isImageNode(el);
+    const existing = ruleForTarget(el);
+    if (existing) {
+      if (pickerActive) stopPicker();
+      openPanel();
+      showEditor(existing, { targetKind: isImg ? 'image' : 'background', targetElement: el });
+      return;
+    }
     const source = isImg ? originalImageURL(el) : firstBgURL(el);
     // Large inline images can be several megabytes. Match their element rather
     // than duplicating those bytes in every saved rule and cross-tab settings sync.
     const useSource = source && (!/^data:/i.test(source) || source.length <= 2048);
     const suggested = {
       scope: location.hostname, mode: useSource ? 'url' : 'selector',
-      pattern: useSource ? source : '', selector: uniqueSelector(el), replacement: ''
+      pattern: useSource ? source : '', selector: uniqueSelector(el), replacement: '',
+      targetKind: isImg ? 'image' : 'background', targetElement: el
     };
     if (pickerActive) stopPicker();
     openPanel();
@@ -2296,6 +2495,11 @@
 
   function targetSource(el) {
     return isImageNode(el) ? originalImageURL(el) : firstBgURL(el);
+  }
+
+  function ruleForTarget(el) {
+    const id = overrides.get(el)?.ruleId;
+    return id ? settings.rules.find(rule => rule.id === id) || null : null;
   }
 
   // Called for a right-button press and again for the contextmenu event (which
@@ -2351,12 +2555,21 @@
 
   const PICK_HINT = 'Click an image or CSS background to create a rule. Press Esc to cancel.';
 
+  function showPickerHint(message) {
+    const marker = message.indexOf('Esc');
+    if (marker < 0) { $('pickHint').textContent = message; return; }
+    const key = document.createElement('em');
+    key.textContent = 'Esc';
+    $('pickHint').replaceChildren(document.createTextNode(message.slice(0, marker)), key,
+      document.createTextNode(message.slice(marker + 3)));
+  }
+
   function startPicker(message) {
     clearContextTarget();
     closePanel(false);
     pickerActive = true;
     hoveredTarget = null;
-    $('pickHint').textContent = typeof message === 'string' ? message : PICK_HINT;
+    showPickerHint(typeof message === 'string' ? message : PICK_HINT);
     $('pickHint').hidden = false;
     render();
     document.addEventListener('pointermove', onPickerMove, true);
@@ -2387,7 +2600,7 @@
     { label: 'Toggle floating button', run: () => { settings.showButton = !settings.showButton; saveSettings(); } }
   ];
   const menuCommandIds = new Map();
-  let menuShowsContextCommand = null;
+  let menuContextLabel = null;
 
   function registerMenuCommand(command) {
     const options = command.title ? { title: command.title } : {};
@@ -2408,22 +2621,26 @@
   function syncMenuCommands() {
     if (typeof GM_registerMenuCommand !== 'function') return;
     const canRemove = typeof GM_unregisterMenuCommand === 'function';
-    const show = !canRemove || !!currentContextTarget();
-    if (show === menuShowsContextCommand) return;
+    const target = currentContextTarget();
+    const label = !canRemove ? 'Edit or create rule from right-clicked image' :
+      !target ? null : ruleForTarget(target) ? 'Edit rule from right-clicked image' :
+        'New rule from right-clicked image';
+    if (label === menuContextLabel && menuCommandIds.size) return;
     try {
-      if (!show) {
-        unregisterMenuCommand(MENU_COMMANDS[0].label);
+      if (!label) {
+        if (menuContextLabel) unregisterMenuCommand(menuContextLabel);
       } else {
         for (const label of [...menuCommandIds.keys()]) unregisterMenuCommand(label);
-        for (const command of MENU_COMMANDS) registerMenuCommand(command);
+        registerMenuCommand({ ...MENU_COMMANDS[0], label });
+        for (const command of MENU_COMMANDS.slice(1)) registerMenuCommand(command);
       }
-      if (menuShowsContextCommand === null && !show) {
+      if (menuContextLabel === null && !label) {
         for (const command of MENU_COMMANDS.slice(1)) registerMenuCommand(command);
       }
     } catch (err) {
       console.warn('[Image Swap] Could not update menu commands:', err);
     }
-    menuShowsContextCommand = show;
+    menuContextLabel = label;
   }
 
   let dragState = null;
@@ -2501,7 +2718,12 @@
   $('veil').addEventListener('pointercancel', () => { backdropPress = null; });
   $('enabled').addEventListener('change', e => { settings.enabled = e.target.checked; saveSettings(); });
   $('showButton').addEventListener('change', e => { settings.showButton = e.target.checked; saveSettings(); });
-  $('themeMode').addEventListener('change', e => { settings.theme = e.target.value; saveSettings(); });
+  $('themeToggle').addEventListener('click', e => {
+    settings.theme = e.shiftKey ?
+      (settings.theme === 'auto' ? ui.host.dataset.theme : 'auto') :
+      (ui.host.dataset.theme === 'light' ? 'dark' : 'light');
+    saveSettings();
+  });
   if (typeof colorSchemeQuery.addEventListener === 'function')
     colorSchemeQuery.addEventListener('change', () => { if (settings.theme === 'auto') applyTheme(); });
   else if (typeof colorSchemeQuery.addListener === 'function')
@@ -2511,11 +2733,33 @@
   $('mode').addEventListener('change', setEditorMode);
   $('replacementType').addEventListener('change', setReplacementMode);
   $('conditionMode').addEventListener('change', setConditionMode);
+  for (const id of ['scheduleFrom', 'scheduleUntil']) {
+    const textInput = $(id);
+    const picker = $(id + 'Picker');
+    const button = $(id + 'Calendar');
+    const revealNativePicker = (focus = false) => {
+      textInput.parentElement.classList.add('native-date-fallback');
+      button.hidden = true;
+      picker.tabIndex = 0;
+      picker.removeAttribute('aria-hidden');
+      if (focus) picker.focus();
+    };
+    if (typeof picker.showPicker !== 'function') revealNativePicker();
+    else button.addEventListener('click', () => {
+      try { picker.showPicker(); }
+      catch { revealNativePicker(true); }
+    });
+    textInput.addEventListener('input', () => { picker.value = parseDisplayDate(textInput.value) || ''; });
+    picker.addEventListener('change', () => {
+      textInput.value = formatDisplayDate(picker.value);
+    });
+  }
+  $('fit').addEventListener('change', setAppearanceControlState);
   $('copySettings').addEventListener('click', copySettingsFromRule);
-  $('assetChoice').addEventListener('change', () => { showAssetPreview(); scheduleDraftPreview(); });
+  $('assetChoice').addEventListener('change', scheduleDraftPreview);
   $('editor').addEventListener('input', scheduleDraftPreview);
   $('editor').addEventListener('change', scheduleDraftPreview);
-  $('previewImage').addEventListener('load', sizePreviewFrame);
+  $('previewImage').addEventListener('load', () => sizePreviewFrame());
   $('previewView').addEventListener('click', showPagePreview);
   $('previewReturn').addEventListener('click', () => returnToEditor());
   $('uploadInput').addEventListener('change', e => importLocalImage(e.target.files?.[0]));

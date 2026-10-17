@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>No-BS Image Swapper Firefox date fallback</title>
+<body>
+<img id="target" alt="test image" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=">
+<script>
+  const values = new Map();
+  const commands = new Map();
+  window.GM_getValue = (key, fallback) => values.has(key) ? values.get(key) : fallback;
+  window.GM_setValue = (key, value) => values.set(key, value);
+  window.GM_deleteValue = key => values.delete(key);
+  window.GM_registerMenuCommand = (label, callback) => { commands.set(label, callback); return label; };
+  window.GM_unregisterMenuCommand = label => commands.delete(label);
+  window.GM_addValueChangeListener = () => 1;
+  const nativeAttachShadow = Element.prototype.attachShadow;
+  window.nbsisTestRoot = null;
+  Element.prototype.attachShadow = function(options) {
+    const root = nativeAttachShadow.call(this, options);
+    if (this.id === 'image-swap-widget-host') window.nbsisTestRoot = root;
+    return root;
+  };
+  window.openNbsisTestPanel = () => commands.get('Manage image replacements')?.();
+</script>
+<script src="../No-BS-Image-Swapper.user.js"></script>

@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'ImageSwap.user.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'No-BS-Image-Swapper.user.js'), 'utf8');
 const start = source.indexOf('  // * is the only wildcard.');
 const end = source.indexOf('  // querySelector() does not accept pseudo-elements', start);
 assert.ok(start >= 0 && end > start, 'URL pattern functions must exist');
