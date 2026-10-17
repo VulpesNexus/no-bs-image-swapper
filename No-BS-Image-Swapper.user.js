@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         No-BS Image Swapper
 // @namespace    https://github.com/VulpesNexus/no-bs-image-swapper
-// @version      1.8.0
+// @version      1.8.1
 // @description  Persistent image replacement with named rules, reusable settings, overlap warnings, and live previews.
-// @author       VulpesNexus
+// @author       Vixen420
 // @homepageURL  https://github.com/VulpesNexus/no-bs-image-swapper
 // @updateURL   https://raw.githubusercontent.com/VulpesNexus/no-bs-image-swapper/main/No-BS-Image-Swapper.user.js
 // @downloadURL https://raw.githubusercontent.com/VulpesNexus/no-bs-image-swapper/main/No-BS-Image-Swapper.user.js

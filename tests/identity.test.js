@@ -14,7 +14,7 @@ test('published metadata names the product and its actual repository', () => {
   assert.equal(header.match(/^\/\/ @updateURL\s+(\S+)$/m)?.[1], rawScript);
   assert.equal(header.match(/^\/\/ @downloadURL\s+(\S+)$/m)?.[1], rawScript);
   assert.match(header, /^\/\/ @version\s+\d+\.\d+\.\d+$/m);
-  assert.match(header, /^\/\/ @author\s+VulpesNexus$/m);
+  assert.match(header, /^\/\/ @author\s+Vixen420$/m);
   assert.match(source, /const STORAGE_KEY = 'image-swap-settings-v1'/);
   assert.match(source, /const ASSET_PREFIX = 'image-swap-upload-v1:'/);
 });
